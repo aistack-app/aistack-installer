@@ -18,14 +18,15 @@ HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
 hermes_install() {
   CURRENT_STAGE="Stage 3: Hermes runtime (pip)"
-  resolve_python
+  # PYTHON_BIN уже выставлен в Stage 2 (ensure_python_311_or_newer); подстрахуемся для macOS/повторов
+  [ -z "${PYTHON_BIN:-}" ] && resolve_python
 
   substep "Создаю структуру ~/.hermes/"
   run mkdir -p "$HERMES_HOME"/{logs,sessions,config,skills,workspaces}
   run mkdir -p "$HOME/.local/bin"
 
-  substep "Python venv: $HERMES_HOME/venv"
-  run_step "Создаю venv" "$PY_BIN" -m venv "$HERMES_HOME/venv"
+  substep "Python venv ($PYTHON_BIN): $HERMES_HOME/venv"
+  run_step "Создаю venv" "$PYTHON_BIN" -m venv "$HERMES_HOME/venv"
 
   # pip core-установка: БЕЗ extras → без playwright/Chromium (ARM-safe).
   # Можно переопределить набор extras через AISTACK_HERMES_SPEC (напр. "hermes-agent[anthropic]").
