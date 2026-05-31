@@ -5,7 +5,7 @@
 # ============================================================================
 
 detect_os() {
-  OS_FAMILY="unknown"; PKG=""
+  OS_FAMILY="unknown"; PKG=""; OS_DISTRO=""
   local uname_s; uname_s="$(uname -s 2>/dev/null || echo unknown)"
   case "$uname_s" in
     Darwin)
@@ -14,6 +14,7 @@ detect_os() {
       if [ -r /etc/os-release ]; then
         # shellcheck disable=SC1091
         . /etc/os-release
+        OS_DISTRO="${ID:-}"   # ubuntu / debian / … (для выбора deadsnakes PPA)
         case "${ID:-}${ID_LIKE:-}" in
           *ubuntu*|*debian*) OS_FAMILY="debian"; PKG="apt";;
           *) OS_FAMILY="unknown";;
