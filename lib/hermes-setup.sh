@@ -70,17 +70,39 @@ YAML
 }
 
 _hermes_start() {
-  # TO-VERIFY: точная команда старта рантайма. Нефатально (run_soft) — если имя
-  # подкоманды другое, установка дойдёт до конца, а команду поправим после теста.
-  local serve_cmd="${AISTACK_HERMES_SERVE_CMD:-serve}"
-  run_soft "Запускаю Hermes runtime (hermes $serve_cmd)" \
-    bash -c "nohup '$HERMES_HOME/venv/bin/hermes' $serve_cmd >> '$LOG' 2>&1 &"
-  sleep 2
-  HERMES_OK=0
-  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then HERMES_OK=1; fi
-  curl -sf http://localhost:7777/health >/dev/null 2>&1 && HERMES_OK=1 || true
-  if [ "$HERMES_OK" -eq 1 ]; then ok "Hermes отвечает (порт 7777)"; else
-    warn "Hermes health-check (7777) не прошёл. Это TO-VERIFY место — уточним команду старта после Docker-теста."
-    warn "Память (Hermes) можно поднять позже вручную; базовая команда агентов работает и без неё."
+  # Правильная команда запуска runtime Hermes — `hermes gateway` (НЕ `serve`, его в пакете
+  # НЕТ). Подтверждено по wheel: entry-point `hermes = hermes_cli.main:main`, подкоманды
+  #   gateway [run|start|stop|status|install]. Оф. установщик Hermes без systemd делает
+  #   `nohup hermes gateway &` — повторяем этот универсальный (в т.ч. Docker) путь.
+  # Готовность определяем через `hermes gateway status` + живой процесс — НЕ через curl :7777
+  # (HTTP-порта 7777 у пакета нет, это было ошибочное наследие старой bundle-архитектуры).
+  local HBIN="$HERMES_HOME/venv/bin/hermes"
+  local serve_cmd="${AISTACK_HERMES_SERVE_CMD:-gateway}"
+  mkdir -p "$HERMES_HOME/logs" 2>/dev/null || true
+
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Hermes gateway (dry-run, пропуск)"; return 0; fi
+
+  substep "Запускаю Hermes ($serve_cmd) в фоне"
+  nohup "$HBIN" $serve_cmd >> "$HERMES_HOME/logs/gateway.log" 2>&1 &
+  local gw_pid=$!
+
+  # Retry готовности: 10 попыток по 3 сек
+  local i=1 ready=0
+  while [ "$i" -le 10 ]; do
+    if "$HBIN" gateway status 2>/dev/null | grep -qiE 'is running|gateway running|pid [0-9]|online'; then ready=1; break; fi
+    kill -0 "$gw_pid" 2>/dev/null || break   # процесс умер и status не показывает running → не поднялся
+    sleep 3; heartbeat; i=$((i + 1))
+  done
+  # foreground-режим (Docker): если процесс всё ещё жив — считаем поднятым
+  if [ "$ready" -eq 0 ] && kill -0 "$gw_pid" 2>/dev/null; then ready=1; fi
+
+  "$HBIN" gateway status >> "$LOG" 2>&1 || true   # снимок статуса в лог для диагностики
+
+  if [ "$ready" -eq 1 ]; then
+    ok "Hermes gateway запущен (PID $gw_pid)"
+  else
+    warn "Hermes gateway не поднялся за 30с (лог: $HERMES_HOME/logs/gateway.log)."
+    warn "Не критично: Telegram-агенты работают через OpenClaw; Hermes используется как память."
+    warn "Проверить вручную: $HBIN gateway status"
   fi
 }
