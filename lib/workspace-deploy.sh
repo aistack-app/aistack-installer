@@ -11,7 +11,7 @@
 # ============================================================================
 
 WORKSPACE_BASE="${AISTACK_WORKSPACE_BASE:-$HOME/.openclaw}"
-TEMPLATES_URL="${AISTACK_TEMPLATES_URL:-https://github.com/kostyavkoste/aistack-installer/tarball/main}"
+TEMPLATES_URL="${AISTACK_TEMPLATES_URL:-https://github.com/aistack-app/aistack-installer/tarball/main}"
 
 deploy_templates() {
   CURRENT_STAGE="Stage 5: workspace templates"

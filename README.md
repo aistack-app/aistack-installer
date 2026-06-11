@@ -3,7 +3,7 @@
 Установка AI-команды **одной командой** в Terminal. Никаких bundle.zip, никакой распаковки.
 
 ```bash
-bash <(curl -fsSL https://kostyavkoste.github.io/aistack-installer/install.sh) ВАШ-КЛЮЧ
+bash <(curl -fsSL https://aistack-app.github.io/aistack-installer/install.sh) ВАШ-КЛЮЧ
 ```
 
 Пример ключа: `AIS-TEAM-FULL-A7B3XK92`

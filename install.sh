@@ -2,7 +2,7 @@
 # ============================================================================
 # AIStack · One-liner installer (v1.5)
 #
-#   bash <(curl -fsSL https://kostyavkoste.github.io/aistack-installer/install.sh) AIS-...
+#   bash <(curl -fsSL https://aistack-app.github.io/aistack-installer/install.sh) AIS-...
 #
 # Платформы: macOS (Intel+ARM), Ubuntu 22.04+, Debian 12+. Windows — не в v1.5.
 # Тестовый прогон без установки: AISTACK_DRY_RUN=1 bash install.sh AIS-TEAM-FULL-DEV1234
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 RAW_KEY="${1:-}"
-AISTACK_BASE_URL="${AISTACK_BASE_URL:-https://kostyavkoste.github.io/aistack-installer}"
+AISTACK_BASE_URL="${AISTACK_BASE_URL:-https://aistack-app.github.io/aistack-installer}"
 LIBS="helpers preflight apt-deps hermes-setup openclaw-setup workspace-deploy wizard"
 
 # ── Bootstrap: грузим lib/ локально (если запущен из чекаута) или с github ───
