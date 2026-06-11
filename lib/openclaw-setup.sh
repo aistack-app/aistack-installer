@@ -119,8 +119,10 @@ register_bots() {
   for a in $AGENTS; do
     tok="${TG_TOKENS[$i]:-}"
     if [ -n "$tok" ]; then
+      # именно --token: --bot-token телеграмом не принимается
+      # («Telegram requires token or --token-file») — поймано Docker-тестом
       run_soft "Telegram-аккаунт: $a" \
-        openclaw channels add --channel telegram --account "$a" --bot-token "$tok"
+        openclaw channels add --channel telegram --account "$a" --token "$tok"
     fi
     if ( run openclaw agents add "$a" --non-interactive \
            --workspace "$WORKSPACE_BASE/workspace-$a" --bind "telegram:$a" ); then
