@@ -50,6 +50,15 @@ spinner() {
   return "$rc"
 }
 
+# Редакция секретов в любом выводе для пользователя: ученики шлют скриншоты
+# ошибок в поддержку — TG-токены и API-ключи не должны светиться.
+redact() {
+  sed -E \
+    -e 's/[0-9]{8,12}:[A-Za-z0-9_-]{30,}/[TG_TOKEN]/g' \
+    -e 's/sk-[A-Za-z0-9_-]{20,}/sk-[REDACTED]/g' \
+    -e 's/(API_KEY[^=]*=)[^ ]+/\1[REDACTED]/g'
+}
+
 # run_step "сообщение" cmd...  → тихо (в лог) + спиннер, фатально при ошибке
 run_step() {
   local msg="$1"; shift
@@ -57,7 +66,7 @@ run_step() {
   if ! spinner "$!" "$msg"; then
     err "Не удалось: $msg"
     echo "     ${RED}лог: $LOG${RST} (последние строки):"
-    tail -n 15 "$LOG" 2>/dev/null | sed 's/^/       /'
+    tail -n 15 "$LOG" 2>/dev/null | redact | sed 's/^/       /'
     exit 1
   fi
 }

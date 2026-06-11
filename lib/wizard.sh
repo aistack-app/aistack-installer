@@ -2,7 +2,7 @@
 # ============================================================================
 # wizard.sh — интерактивный сбор: API-ключ, TG-токены (по числу агентов), имя проекта.
 # Неинтерактивный режим (DEV-ключ / AISTACK_NONINTERACTIVE=1 / нет TTY) — берёт из env.
-# Выставляет: API_KEY, PROVIDER, BUSINESS_NAME, TG_TOKENS (массив).
+# Выставляет: API_KEY, PROVIDER, BUSINESS_NAME, TG_TOKENS (массив), OWNER_TG_ID.
 # ============================================================================
 
 _infer_provider() {
@@ -30,6 +30,7 @@ run_wizard() {
     say "Неинтерактивный режим (DEV/CI) — беру значения из окружения / заглушки."
     API_KEY="${AISTACK_API_KEY:-sk-ant-DEV-PLACEHOLDER}"
     BUSINESS_NAME="${AISTACK_BUSINESS:-Demo Project}"
+    OWNER_TG_ID="${AISTACK_OWNER_TG_ID:-}"
     # AISTACK_TG_TOKENS — токены через пробел
     local t i=0
     for t in ${AISTACK_TG_TOKENS:-}; do TG_TOKENS+=("$t"); i=$((i+1)); done
@@ -53,6 +54,20 @@ run_wizard() {
   printf "  Название вашего проекта/бизнеса (Enter — пропустить): "
   read -r BUSINESS_NAME
   [ -z "$BUSINESS_NAME" ] && BUSINESS_NAME="Мой проект"
+
+  # 2b) Telegram ID владельца — для allowlist: иначе боты встречают хозяина
+  # pairing-кодом, а любой посторонний может писать агентам.
+  echo ""
+  echo "  Ваш Telegram ID — чтобы боты отвечали только вам."
+  echo "  ${CYA}Узнать ID: напишите @userinfobot в Telegram (пришлёт число).${RST}"
+  OWNER_TG_ID=""
+  printf "  Telegram ID (Enter — настроить позже): "
+  read -r OWNER_TG_ID
+  if [ -n "$OWNER_TG_ID" ] && ! printf '%s' "$OWNER_TG_ID" | grep -qE '^[0-9]{5,12}$'; then
+    warn "Не похоже на числовой ID — пропускаю (настроите позже: openclaw config set)"
+    OWNER_TG_ID=""
+  fi
+  [ -n "$OWNER_TG_ID" ] && ok "Доступ будет ограничен ID: $OWNER_TG_ID"
 
   # 3) TG-токены — по числу агентов
   echo ""
