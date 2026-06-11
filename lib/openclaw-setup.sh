@@ -21,9 +21,20 @@ openclaw_install() {
   fi
 }
 
-openclaw_link_hermes() {
-  # Привязываем память/runtime к Hermes (нефатально)
-  run_soft "Подключаю Hermes как память" bash -c "openclaw config set memory.provider hermes; openclaw config set coordinator.runtime hermes"
+# Память агентов. ВАЖНО (выяснено по исходникам/докам OpenClaw 2026.5.28):
+#   • У OpenClaw СВОЯ встроенная файловая память — "default built-in memory store":
+#     MEMORY.md (curated long-term memory) + memory/YYYY-MM-DD.md в каждом workspace.
+#     Наши шаблоны эти файлы уже разворачивают → агенты ИМЕЮТ долговременную память
+#     между сессиями по умолчанию, без какой-либо настройки.
+#   • Ключей memory.provider / coordinator.runtime в OpenClaw НЕТ — это была ошибочная
+#     догадка (отсюда и warn). "Hermes как memory backend" не существует.
+#   • Единственная связь OpenClaw↔Hermes — одноразовая МИГРАЦИЯ (openclaw migrate hermes),
+#     импорт config/memories/skills. Требует свежий OpenClaw и не вписывается в наш flow.
+# Поэтому ничего не «подключаем» — просто подтверждаем, что встроенная память активна.
+# (Опциональный апгрейд до векторной памяти: плагин @openclaw/memory-lancedb — отдельно.)
+openclaw_verify_memory() {
+  CURRENT_STAGE="Stage 4b: память"
+  ok "Память агентов: встроенная файловая (MEMORY.md в каждом workspace) — долговременная, между сессиями"
 }
 
 openclaw_set_provider() {

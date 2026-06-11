@@ -78,7 +78,7 @@ main() {
   # ── Stage 4: OpenClaw ─────────────────────────────────────────────────────
   stage "STAGE 4/8 · OpenClaw runtime"
   openclaw_install
-  openclaw_link_hermes
+  openclaw_verify_memory
 
   # ── Stage 5: workspace-шаблоны ────────────────────────────────────────────
   stage "STAGE 5/8 · шаблоны команды"
