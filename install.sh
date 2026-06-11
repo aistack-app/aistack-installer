@@ -114,7 +114,7 @@ print_final_marker() {
   echo ""
   echo "  📊 Dashboard:        http://localhost:18789"
   echo "  💬 Первый агент:     напишите боту в Telegram «привет»"
-  echo "  🩺 Если что-то не так: openclaw doctor --fix"
+  echo "  🩺 Если что-то не так: openclaw status  (диагноз без изменений)"
   echo ""
   echo "${GRN}════════════════════════════════════════════════════════════${RST}"
 }

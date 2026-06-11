@@ -1,66 +1,193 @@
 # shellcheck shell=bash
 # ============================================================================
-# openclaw-setup.sh — установка OpenClaw (npm) + базовая привязка к Hermes.
+# openclaw-setup.sh — установка OpenClaw (npm, ПИН ВЕРСИИ) + провайдер модели,
+# регистрация агентов-ботов, gateway как сервис.
+#
+# ВАЖНО ПРО ПИН: схема openclaw.json ломается между версиями (проверено на
+# живой миграции 2026.4.27 → 2026.6.5: agentRuntime переехал с уровня агента
+# на уровень модели). Весь код ниже написан под схему и CLI пина — при смене
+# пина перепроверять: agents add / channels add / config set пути.
 # ============================================================================
+
+OPENCLAW_PIN="${AISTACK_OPENCLAW_PIN:-2026.6.5}"
 
 openclaw_install() {
   CURRENT_STAGE="Stage 4: OpenClaw"
-  if command -v openclaw >/dev/null 2>&1; then
-    ok "OpenClaw уже установлен ($(openclaw --version 2>/dev/null | head -n1))"
+
+  # npm global prefix без root: используем ~/.npm-global, добавляем в PATH.
+  # НО: если node стоит через nvm — prefix НЕ трогаем (nvm с ним несовместим
+  # и перестанет переключать версии; у nvm свой user-writable prefix).
+  if [ "$OS_FAMILY" != "macos" ] && [ "$(id -u)" -ne 0 ]; then
+    case "$(command -v node 2>/dev/null)" in
+      *"/.nvm/"*) say "Node через nvm — npm prefix не трогаем (несовместимы)";;
+      *)
+        run npm config set prefix "$HOME/.npm-global"
+        export PATH="$HOME/.npm-global/bin:$PATH"
+        _persist_npm_global_path;;
+    esac
+  fi
+
+  local cur=""
+  cur="$(openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  if [ "$cur" = "$OPENCLAW_PIN" ]; then
+    ok "OpenClaw $OPENCLAW_PIN уже установлен"
   else
-    # npm global prefix без root: используем ~/.npm-global, добавляем в PATH
-    if [ "$OS_FAMILY" != "macos" ] && [ "$(id -u)" -ne 0 ]; then
-      run npm config set prefix "$HOME/.npm-global"
-      export PATH="$HOME/.npm-global/bin:$PATH"
-    fi
-    run_step "Ставлю OpenClaw (npm install -g openclaw)" npm install -g openclaw
+    [ -n "$cur" ] && warn "Найден OpenClaw $cur — ставлю протестированную версию $OPENCLAW_PIN"
+    run_step "Ставлю OpenClaw $OPENCLAW_PIN (npm install -g)" npm install -g "openclaw@$OPENCLAW_PIN"
   fi
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "OpenClaw OK (dry-run)"; return 0; fi
-  if openclaw --version >/dev/null 2>&1; then ok "OpenClaw OK"; else
-    warn "openclaw --version не отработал — проверьте PATH (~/.npm-global/bin или /usr/local/bin)."
+
+  # Явная проверка версии — а не просто «команда нашлась» (иначе старый
+  # системный openclaw маскирует неудавшуюся установку)
+  cur="$(openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  if [ "$cur" = "$OPENCLAW_PIN" ]; then
+    ok "OpenClaw OK ($cur)"
+  else
+    err "OpenClaw $OPENCLAW_PIN не подтвердился (фактически: ${cur:-не найден})."
+    err "Проверьте PATH (~/.npm-global/bin или /usr/local/bin) и запустите заново."
+    exit 1
+  fi
+
+  # Самообновление движка — ВЫКЛЮЧИТЬ. Реальный инцидент: фоновый автоапдейт
+  # подменил файлы под работающим gateway → ERR_MODULE_NOT_FOUND, все боты легли.
+  run_soft "Отключаю автообновление движка" openclaw config set update.auto.enabled false --strict-json
+
+  # Защита существующей установки: если конфиг уже есть и в нём есть агенты —
+  # бэкап до любых наших правок (agents add по живому id не перезапишет, но
+  # каналы/провайдера мы трогаем).
+  local cfg="$HOME/.openclaw/openclaw.json"
+  if [ -f "$cfg" ] && grep -q '"list"' "$cfg" 2>/dev/null; then
+    local bak="$cfg.bak-aistack-$(date +%Y%m%d-%H%M%S)"
+    cp "$cfg" "$bak" 2>/dev/null \
+      && warn "Найдена существующая установка OpenClaw — бэкап конфига: $bak"
   fi
 }
 
-# Память агентов. ВАЖНО (выяснено по исходникам/докам OpenClaw 2026.5.28):
-#   • У OpenClaw СВОЯ встроенная файловая память — "default built-in memory store":
-#     MEMORY.md (curated long-term memory) + memory/YYYY-MM-DD.md в каждом workspace.
-#     Наши шаблоны эти файлы уже разворачивают → агенты ИМЕЮТ долговременную память
-#     между сессиями по умолчанию, без какой-либо настройки.
-#   • Ключей memory.provider / coordinator.runtime в OpenClaw НЕТ — это была ошибочная
-#     догадка (отсюда и warn). "Hermes как memory backend" не существует.
-#   • Единственная связь OpenClaw↔Hermes — одноразовая МИГРАЦИЯ (openclaw migrate hermes),
-#     импорт config/memories/skills. Требует свежий OpenClaw и не вписывается в наш flow.
-# Поэтому ничего не «подключаем» — просто подтверждаем, что встроенная память активна.
-# (Опциональный апгрейд до векторной памяти: плагин @openclaw/memory-lancedb — отдельно.)
+# PATH для новых терминалов: без этого после закрытия окна `openclaw`
+# превращается в command not found (npm prefix ~/.npm-global не в PATH по
+# умолчанию). Дописываем в rc-файлы только если строки ещё нет.
+_persist_npm_global_path() {
+  local line='export PATH="$HOME/.npm-global/bin:$PATH"' rc
+  for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
+    [ -f "$rc" ] || continue
+    grep -qsF '.npm-global/bin' "$rc" || echo "$line" >> "$rc"
+  done
+}
+
+# Память агентов. ВАЖНО (выяснено по исходникам/докам OpenClaw):
+#   • У OpenClaw СВОЯ встроенная файловая память — MEMORY.md + memory/*.md
+#     в каждом workspace; наши шаблоны её уже разворачивают.
+#   • Ключей memory.provider / coordinator.runtime НЕ существует,
+#     «Hermes как memory backend» — нет; связь только openclaw migrate hermes.
 openclaw_verify_memory() {
   CURRENT_STAGE="Stage 4b: память"
   ok "Память агентов: встроенная файловая (MEMORY.md в каждом workspace) — долговременная, между сессиями"
 }
 
+# Провайдер модели. Пути в схеме (проверены на живом конфиге $OPENCLAW_PIN):
+#   agents.defaults.model.primary  — модель по умолчанию для всех агентов
+#   env.vars.<KEY>                 — env-переменные для процессов агентов
+# Путей providers.default / providers.<p>.api_key в схеме НЕ существует —
+# старый вариант молча не работал.
 openclaw_set_provider() {
   CURRENT_STAGE="Stage 6b: provider"
-  run_soft "Настраиваю провайдера модели ($PROVIDER)" bash -c "
-    openclaw config set providers.default '$PROVIDER'
-    openclaw config set 'providers.$PROVIDER.api_key' '$API_KEY'
-  "
+  case "$PROVIDER" in
+    anthropic)
+      run_soft "Модель по умолчанию: anthropic/claude-sonnet-4-6" \
+        openclaw config set agents.defaults.model.primary "anthropic/claude-sonnet-4-6"
+      run_soft "Сохраняю API-ключ (env.vars)" \
+        openclaw config set env.vars.ANTHROPIC_API_KEY "$API_KEY";;
+    openrouter)
+      run_soft "Сохраняю API-ключ OpenRouter (env.vars)" \
+        openclaw config set env.vars.OPENROUTER_API_KEY "$API_KEY"
+      warn "Модель OpenRouter выберите после установки: dashboard → Settings → Model";;
+    *)
+      run_soft "Сохраняю API-ключ (env.vars)" \
+        openclaw config set "env.vars.$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY" "$API_KEY"
+      warn "Провайдер $PROVIDER: модель выберите после установки (dashboard → Settings)";;
+  esac
 }
 
-# Регистрирует агентов-ботов в OpenClaw: каждому свой workspace + TG-токен
+# Регистрация агентов-ботов. Реальный CLI пина (флага --telegram-token НЕ
+# существует — старый вариант молча проваливался):
+#   1) телеграм-аккаунт с токеном:  channels add --channel telegram --account <a> --bot-token <tok>
+#   2) агент + биндинг на аккаунт:  agents add <a> --non-interactive --workspace <ws> --bind telegram:<a>
+#   3) доступ владельцу (allowlist) — иначе бот встречает pairing-кодом
 register_bots() {
   CURRENT_STAGE="Stage 7: register agents"
-  local i=0 a tok
+  local i=0 a tok registered=0
   for a in $AGENTS; do
     tok="${TG_TOKENS[$i]:-}"
-    run_soft "Регистрирую агента: $a" bash -c "
-      openclaw agents add '$a' --workspace '$WORKSPACE_BASE/workspace-$a' --telegram-token '$tok'
-    "
+    if [ -n "$tok" ]; then
+      run_soft "Telegram-аккаунт: $a" \
+        openclaw channels add --channel telegram --account "$a" --bot-token "$tok"
+    fi
+    if ( run openclaw agents add "$a" --non-interactive \
+           --workspace "$WORKSPACE_BASE/workspace-$a" --bind "telegram:$a" ); then
+      registered=$((registered + 1))
+      ok "Агент: $a"
+    else
+      warn "Агент $a: agents add не отработал (возможно, уже существует) — см. лог $LOG"
+    fi
+    # Доступ только владельцу (если ID собран в wizard)
+    if [ -n "${OWNER_TG_ID:-}" ]; then
+      run_soft "Доступ владельцу: $a" bash -c "
+        openclaw config set 'channels.telegram.accounts.$a.dmPolicy' allowlist
+        openclaw config set 'channels.telegram.accounts.$a.allowFrom' '[\"$OWNER_TG_ID\"]' --strict-json
+      "
+    fi
     i=$((i + 1))
+    # Telegram банит при создании/подключении многих ботов подряд — пауза
+    [ "$i" -lt "$AGENT_COUNT" ] && sleep 2
   done
-  ok "Зарегистрировано агентов: $i/$AGENT_COUNT"
+
+  # Владелец команд (доступ к /diagnostics и owner-командам в ботах)
+  if [ -n "${OWNER_TG_ID:-}" ]; then
+    run_soft "Владелец команд: $OWNER_TG_ID" \
+      openclaw config set commands.ownerAllowFrom "[\"telegram:$OWNER_TG_ID\"]" --strict-json
+  fi
+
+  ok "Зарегистрировано агентов: $registered/$AGENT_COUNT"
+
+  # Конфиг после всех правок ОБЯЗАН быть валидным — иначе gateway не стартует
+  if [ "${AISTACK_DRY_RUN:-0}" != "1" ]; then
+    if run openclaw config validate; then
+      ok "Конфиг валиден"
+    else
+      err "Конфиг не прошёл валидацию после регистрации агентов. Лог: $LOG"
+      err "Бэкап исходного конфига (если был): ~/.openclaw/openclaw.json.bak-aistack-*"
+      exit 1
+    fi
+  fi
 }
 
 openclaw_start() {
   CURRENT_STAGE="Stage 8: start gateway"
-  run_soft "Запускаю gateway" bash -c "openclaw gateway start"
-  run_soft "Проверка openclaw doctor" bash -c "openclaw doctor"
+  # install = сервис (launchd/systemd) → gateway переживает перезагрузку машины
+  run_soft "Ставлю gateway как сервис (автозапуск)" openclaw gateway install
+
+  # TLS-страховка: node может не доверять системным CA (антивирусы/VPN с
+  # MITM-инспекцией — частый кейс в РФ). Реальный инцидент: все боты легли
+  # с UNKNOWN_CERTIFICATE_VERIFICATION_ERROR; лечится этими переменными.
+  local svc_env="$HOME/.openclaw/service-env/ai.openclaw.gateway.env"
+  if [ "${AISTACK_DRY_RUN:-0}" != "1" ] && [ -f "$svc_env" ] \
+     && ! grep -q "NODE_USE_SYSTEM_CA" "$svc_env" 2>/dev/null; then
+    {
+      echo "export NODE_USE_SYSTEM_CA='1'"
+      [ -f /etc/ssl/cert.pem ] && echo "export NODE_EXTRA_CA_CERTS='/etc/ssl/cert.pem'"
+    } >> "$svc_env" 2>/dev/null && ok "TLS: доверие системным сертификатам включено"
+  fi
+
+  run_soft "Запускаю gateway" openclaw gateway start
+  # Подтверждение по факту, с ретраями (сервис поднимается не мгновенно)
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Gateway OK (dry-run)"; return 0; fi
+  local try=0
+  while [ "$try" -lt 5 ]; do
+    if openclaw gateway status 2>/dev/null | grep -qiE "running|reachable"; then
+      ok "Gateway работает"
+      return 0
+    fi
+    try=$((try + 1)); sleep 3; heartbeat
+  done
+  warn "Gateway не подтвердил статус за 15с — проверьте: openclaw gateway status"
 }
