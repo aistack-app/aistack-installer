@@ -151,6 +151,8 @@ register_bots() {
 
   ok "Зарегистрировано агентов: $registered/$AGENT_COUNT"
 
+  setup_smallbiz_runtime
+
   # Конфиг после всех правок ОБЯЗАН быть валидным — иначе gateway не стартует
   if [ "${AISTACK_DRY_RUN:-0}" != "1" ]; then
     if run openclaw config validate; then
@@ -160,6 +162,43 @@ register_bots() {
       err "Бэкап исходного конфига (если был): ~/.openclaw/openclaw.json.bak-aistack-*"
       exit 1
     fi
+  fi
+}
+
+# Рантайм сборки «Малый бизнес»: событийная шина + интервалы HEARTBEAT
+# по ARCHITECTURE-5-BOTS.md (Хозяин 15m, Часы 30m, Голос 1h; Перо/Рост —
+# дефолт, их HEARTBEAT.md сам говорит «только шина»).
+setup_smallbiz_runtime() {
+  [ "${PRESET_ID:-}" = "smallbiz-team" ] || return 0
+  CURRENT_STAGE="Stage 7b: smallbiz runtime"
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Шина и heartbeat (dry-run)"; return 0; fi
+
+  # Событийная шина — файл должен существовать до первого тика
+  mkdir -p "$HOME/.aistack" && touch "$HOME/.aistack/events.log"
+  ok "Событийная шина: ~/.aistack/events.log"
+
+  # Интервалы тиков per-agent (схема: agents.list[i].heartbeat.every).
+  # Правим конфиг python-ом: config set по индексу списка хрупок.
+  if python3 - <<'PYEOF'
+import json, os
+path = os.path.expanduser("~/.openclaw/openclaw.json")
+beats = {"khozyain": "15m", "chasy": "30m", "voice": "1h"}
+with open(path) as f:
+    d = json.load(f)
+changed = False
+for a in d.get("agents", {}).get("list", []):
+    every = beats.get(a.get("id"))
+    if every and a.get("heartbeat", {}).get("every") != every:
+        a["heartbeat"] = {"every": every}
+        changed = True
+if changed:
+    with open(path, "w") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+PYEOF
+  then
+    ok "HEARTBEAT: Хозяин 15м · Часы 30м · Голос 1ч"
+  else
+    warn "Не удалось выставить интервалы heartbeat — настройте позже (agents.list[].heartbeat.every)"
   fi
 }
 
