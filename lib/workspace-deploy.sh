@@ -56,3 +56,35 @@ deploy_templates() {
   done
   ok "Развёрнуто workspace-папок: $deployed/$AGENT_COUNT"
 }
+
+# Персонализация воркспейсов — ПОСЛЕ wizard (Stage 6): подставляет название
+# бизнеса и ID канала в плейсхолдеры, активирует *.template → рабочие файлы.
+# Только для сборки «Малый бизнес» — v1-шаблоны живут по своим правилам.
+personalize_workspaces() {
+  CURRENT_STAGE="Stage 6c: персонализация"
+  [ "${PRESET_ID:-}" = "smallbiz-team" ] || return 0
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Персонализация (dry-run)"; return 0; fi
+
+  local a ws f
+  for a in $AGENTS; do
+    ws="$WORKSPACE_BASE/workspace-$a"
+    [ -d "$ws" ] || continue
+    # *.template → рабочий файл (существующий не перетираем —
+    # повторная установка не убивает заполненный BUSINESS.md)
+    for f in "$ws"/*.template; do
+      [ -e "$f" ] || continue
+      [ -e "${f%.template}" ] || cp "$f" "${f%.template}"
+    done
+    # Плейсхолдеры: студия и канал. ADDRESS/CITY оставляем владельцу.
+    find "$ws" -maxdepth 2 -type f \( -name "*.md" -o -name "*.json" \) \
+      ! -name "*.template" 2>/dev/null | while IFS= read -r f; do
+      if grep -qs '{{STUDIO_NAME}}\|{{CHANNEL_ID}}' "$f"; then
+        sed -i.aistack-bak \
+          -e "s/{{STUDIO_NAME}}/${BUSINESS_NAME//\//\\/}/g" \
+          -e "s/{{CHANNEL_ID}}/${CHANNEL_ID:-ЗАПОЛНИТЕ-ПОЗЖЕ}/g" \
+          "$f" && rm -f "$f.aistack-bak"
+      fi
+    done
+  done
+  ok "Воркспейсы персонализированы: «${BUSINESS_NAME}»${CHANNEL_ID:+, канал $CHANNEL_ID}"
+}

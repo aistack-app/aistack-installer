@@ -31,6 +31,7 @@ run_wizard() {
     API_KEY="${AISTACK_API_KEY:-sk-ant-DEV-PLACEHOLDER}"
     BUSINESS_NAME="${AISTACK_BUSINESS:-Demo Project}"
     OWNER_TG_ID="${AISTACK_OWNER_TG_ID:-}"
+    CHANNEL_ID="${AISTACK_CHANNEL_ID:-}"
     # AISTACK_TG_TOKENS — токены через пробел
     local t i=0
     for t in ${AISTACK_TG_TOKENS:-}; do TG_TOKENS+=("$t"); i=$((i+1)); done
@@ -69,19 +70,60 @@ run_wizard() {
   fi
   [ -n "$OWNER_TG_ID" ] && ok "Доступ будет ограничен ID: $OWNER_TG_ID"
 
-  # 3) TG-токены — по числу агентов
+  # 3) TG-токены — по числу агентов, с подсказкой имени для каждого
   echo ""
-  echo "  Создайте ${GRN}$AGENT_COUNT${RST} ботов в @BotFather и вставьте их токены —"
-  echo "  по одному в строке (формат 123456789:AA...). Агенты: $AGENTS"
-  local n=1
-  while [ "$n" -le "$AGENT_COUNT" ]; do
-    printf "  токен %d/%d: " "$n" "$AGENT_COUNT"
+  echo "  Создайте ${GRN}$AGENT_COUNT${RST} ботов в @BotFather (/newbot) и вставьте токены"
+  echo "  по одному (формат 123456789:AA...)."
+  local studio_slug
+  studio_slug="$(printf '%s' "$BUSINESS_NAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | cut -c1-12)"
+  [ -z "$studio_slug" ] && studio_slug="studio"
+  local n=1 a
+  for a in $AGENTS; do
+    echo "  ${DIM}бот для «$(_agent_title "$a")» — имя в BotFather, например: $(_bot_hint "$a" "$studio_slug")${RST}"
+    printf "  токен %d/%d (%s): " "$n" "$AGENT_COUNT" "$a"
     local tok; read -r tok
-    if [ -z "$tok" ]; then warn "пусто — попробуйте снова"; continue; fi
+    while [ -z "$tok" ]; do printf "  ${YEL}пусто — вставьте токен:${RST} "; read -r tok; done
     TG_TOKENS+=("$tok")
     n=$((n+1))
   done
   ok "Принято токенов: ${#TG_TOKENS[@]}"
+
+  # 4) Канал команды — только для сборки «Малый бизнес»
+  CHANNEL_ID=""
+  if [ "$PRESET_ID" = "smallbiz-team" ]; then
+    echo ""
+    echo "  Private-канал «Команда ${BUSINESS_NAME}» — лента итогов от Хозяина."
+    echo "  ${CYA}1. Создайте private-канал в Telegram${RST}"
+    echo "  ${CYA}2. Добавьте бота Хозяина администратором канала${RST}"
+    echo "  ${CYA}3. Перешлите любой пост канала боту @JsonDumpBot — он покажет chat.id${RST}"
+    printf "  ID канала (вида -100..., Enter — настроить позже): "
+    read -r CHANNEL_ID
+    if [ -n "$CHANNEL_ID" ] && ! printf '%s' "$CHANNEL_ID" | grep -qE '^-?[0-9]{6,16}$'; then
+      warn "Не похоже на ID канала — пропускаю (заполните потом в workspace-khozyain/channel-config.json)"
+      CHANNEL_ID=""
+    fi
+    [ -n "$CHANNEL_ID" ] && ok "Канал команды: $CHANNEL_ID"
+  fi
+}
+
+# Человеческое имя отдела для подсказок wizard
+_agent_title() {
+  case "$1" in
+    voice) echo "Голос · клиенты";;
+    pero) echo "Перо · контент";;
+    rost) echo "Рост · маркетинг";;
+    chasy) echo "Часы · операционка";;
+    khozyain) echo "Хозяин · координатор";;
+    *) echo "$1";;
+  esac
+}
+
+_bot_hint() {
+  case "$1" in
+    voice|pero|rost|chasy) echo "${1}_${2}_bot";;
+    khozyain) echo "boss_${2}_bot";;
+    *) echo "${1}_${2}_bot";;
+  esac
 }
 
 # Записывает API-ключ в конфиги (вызывается после wizard)

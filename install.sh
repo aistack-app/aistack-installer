@@ -88,6 +88,7 @@ main() {
   stage "STAGE 6/8 · настройка"
   run_wizard
   save_api_key
+  personalize_workspaces
 
   # ── Stage 7: регистрация агентов-ботов ────────────────────────────────────
   stage "STAGE 7/8 · регистрация агентов"

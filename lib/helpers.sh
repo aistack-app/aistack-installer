@@ -169,13 +169,18 @@ parse_key() {
     *) KEY_ERROR="Неизвестный тариф: $tariff. Допустимы: MINI, START, PROFI, TEAM, PERSONAL."; return 1;;
   esac
 
+  # SMALLBIZ — отдельная вертикаль «Малый бизнес» (5 ботов-отделов),
+  # допустима на любом тарифе (ценовую матрицу решает генератор ключей)
   case " PROFI TEAM PERSONAL " in
     *" $tariff "*)
-      if [ "$preset" != "FULL" ]; then KEY_ERROR="Тариф $tariff требует сборку FULL (в ключе: $preset). Поддержка: @superwalletsru."; return 1; fi;;
-    *)
-      case " CONTENT SALES EXPERT BUSINESS SCHOOL TECH " in
+      case " FULL SMALLBIZ " in
         *" $preset "*) :;;
-        *) KEY_ERROR="Сборка $preset не существует. Для $tariff допустимы: CONTENT, SALES, EXPERT, BUSINESS, SCHOOL, TECH."; return 1;;
+        *) KEY_ERROR="Тариф $tariff требует сборку FULL или SMALLBIZ (в ключе: $preset). Поддержка: @superwalletsru."; return 1;;
+      esac;;
+    *)
+      case " CONTENT SALES EXPERT BUSINESS SCHOOL TECH SMALLBIZ " in
+        *" $preset "*) :;;
+        *) KEY_ERROR="Сборка $preset не существует. Для $tariff допустимы: CONTENT, SALES, EXPERT, BUSINESS, SCHOOL, TECH, SMALLBIZ."; return 1;;
       esac;;
   esac
 
@@ -191,6 +196,7 @@ parse_key() {
     SCHOOL)   PRESET_ID="school-team";   AGENTS="coordinator producer copywriter";;
     TECH)     PRESET_ID="tech-team";     AGENTS="coordinator tech";;
     FULL)     PRESET_ID="full-team";     AGENTS="coordinator tech producer marketer designer copywriter contentmaker negotiator";;
+    SMALLBIZ) PRESET_ID="smallbiz-team"; AGENTS="voice pero rost chasy khozyain";;
   esac
   AGENT_COUNT=$(printf '%s\n' $AGENTS | grep -c .)
 
