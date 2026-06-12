@@ -115,6 +115,9 @@ print_final_marker() {
   echo ""
   echo "  📊 Dashboard:        http://localhost:18789"
   echo "  💬 Первый агент:     напишите боту в Telegram «привет»"
+  if [ "${PRESET_ID:-}" = "smallbiz-team" ]; then
+    echo "  🗺  С чего начать:    спросите Хозяина «с чего начать» — проведёт по первой неделе"
+  fi
   echo "  🩺 Если что-то не так: openclaw status  (диагноз без изменений)"
   echo ""
   echo "${GRN}════════════════════════════════════════════════════════════${RST}"
