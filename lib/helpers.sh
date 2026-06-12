@@ -6,9 +6,9 @@
 
 # ── Цвета ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
-  GRN=$'\033[32m'; YEL=$'\033[33m'; CYA=$'\033[36m'; RED=$'\033[31m'; MAG=$'\033[35m'; RST=$'\033[0m'
+  GRN=$'\033[32m'; YEL=$'\033[33m'; CYA=$'\033[36m'; RED=$'\033[31m'; MAG=$'\033[35m'; DIM=$'\033[2m'; RST=$'\033[0m'
 else
-  GRN=""; YEL=""; CYA=""; RED=""; MAG=""; RST=""
+  GRN=""; YEL=""; CYA=""; RED=""; MAG=""; DIM=""; RST=""
 fi
 
 LOG="${AISTACK_LOG:-/tmp/aistack-install.log}"
