@@ -100,7 +100,11 @@ openclaw_set_provider() {
     openrouter)
       run_soft "Сохраняю API-ключ OpenRouter (env.vars)" \
         openclaw config set env.vars.OPENROUTER_API_KEY "$API_KEY"
-      warn "Модель OpenRouter выберите после установки: dashboard → Settings → Model";;
+      # Без этого дефолт остаётся openai/* без ключа → каждый ответ бота
+      # падает «Missing API key for provider openai» (поймано на живом VPS).
+      # openrouter/auto — роутер OpenRouter, сам выбирает доступную модель.
+      run_soft "Модель по умолчанию: openrouter/auto" \
+        openclaw config set agents.defaults.model.primary "openrouter/auto";;
     *)
       run_soft "Сохраняю API-ключ (env.vars)" \
         openclaw config set "env.vars.$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY" "$API_KEY"
