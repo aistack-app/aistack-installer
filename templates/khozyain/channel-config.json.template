@@ -1,0 +1,5 @@
+{
+  "channel_chat_id": "{{CHANNEL_ID}}",
+  "channel_name": "Команда {{STUDIO_NAME}}",
+  "_comment": "ID канала: владелец пересылает любой пост канала боту @JsonDumpBot и берёт chat.id (отрицательное число вида -100...). Заполняется wizard-ом при установке."
+}
