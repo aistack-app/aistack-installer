@@ -59,18 +59,35 @@ _deps_macos() {
 ensure_python_311_or_newer() {
   local SUDO="$1"
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then PYTHON_BIN="python3"; ok "Python ≥3.11 (dry-run, пропуск)"; return 0; fi
-  if _has_python_311_or_newer; then resolve_python; return 0; fi
+  if _has_python_311_or_newer; then resolve_python; _ensure_venv_module "$SUDO"; return 0; fi
   # 1) базовые репы (Debian 12+: 3.11; новее дистры — новее)
-  _try_install_python "$SUDO" && { resolve_python; return 0; }
+  _try_install_python "$SUDO" && { resolve_python; _ensure_venv_module "$SUDO"; return 0; }
   # 2) deadsnakes PPA — только Ubuntu (ставит новейшую доступную ветку из PPA)
   if [ "${OS_DISTRO:-}" = "ubuntu" ]; then
     run_step "Добавляю deadsnakes PPA (свежий Python для Ubuntu)" $SUDO add-apt-repository -y ppa:deadsnakes/ppa
     run_step "Обновляю списки после PPA" $SUDO apt-get update -y
-    _try_install_python "$SUDO" && { resolve_python; return 0; }
+    _try_install_python "$SUDO" && { resolve_python; _ensure_venv_module "$SUDO"; return 0; }
   fi
   err "Не удалось установить Python ≥ 3.11 (Hermes требует ≥ 3.11)."
   err "Ubuntu: deadsnakes PPA. Debian 12+ содержит python3.11+ в базовых репах."
   exit 1
+}
+
+# Системный Python ≥3.11 (Ubuntu 24.04 = 3.12) идёт БЕЗ модуля venv —
+# он в отдельном пакете pythonX.Y-venv. Без него Stage 3 падает:
+# «ensurepip is not available» (поймано на живом VPS Beget, Ubuntu 24.04).
+_ensure_venv_module() {
+  local SUDO="$1"
+  "$PYTHON_BIN" -m ensurepip --version >/dev/null 2>&1 && return 0
+  local ver
+  ver="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)"
+  run_step "Ставлю python${ver}-venv (модуль venv для системного Python)" \
+    $SUDO apt-get install -y --no-install-recommends "python${ver}-venv"
+  if ! "$PYTHON_BIN" -m ensurepip --version >/dev/null 2>&1; then
+    err "Модуль venv так и не появился для $PYTHON_BIN — установите вручную: apt install python${ver}-venv"
+    exit 1
+  fi
+  ok "Модуль venv готов (python${ver}-venv)"
 }
 
 # Пробует поставить новейшую доступную ветку: 3.13 → 3.12 → 3.11 (первая успешная)
