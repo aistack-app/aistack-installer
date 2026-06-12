@@ -186,7 +186,10 @@ setup_smallbiz_runtime() {
   if python3 - <<'PYEOF'
 import json, os
 path = os.path.expanduser("~/.openclaw/openclaw.json")
-beats = {"khozyain": "15m", "chasy": "30m", "voice": "1h"}
+# pero/rost работают «по запросу», но задачи из шины забираются ТОЛЬКО
+# на тике — без тика task_for_department лежал бы в файле вечно
+# (поймано на живом VPS). 15м тик = только проверка шины, дёшево.
+beats = {"khozyain": "15m", "chasy": "30m", "voice": "1h", "pero": "15m", "rost": "15m"}
 with open(path) as f:
     d = json.load(f)
 changed = False
