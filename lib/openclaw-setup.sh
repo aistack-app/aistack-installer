@@ -227,15 +227,19 @@ openclaw_start() {
   fi
 
   run_soft "Запускаю gateway" openclaw gateway start
-  # Подтверждение по факту, с ретраями (сервис поднимается не мгновенно)
+  # Подтверждение по факту, с ретраями. Холодный старт gateway (прогрев
+  # провайдеров + плагинов) на медленном VPS легко занимает >15с —
+  # поэтому окно 30с (10×3с), иначе ложный warn после рабочей установки.
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Gateway OK (dry-run)"; return 0; fi
   local try=0
-  while [ "$try" -lt 5 ]; do
+  while [ "$try" -lt 10 ]; do
     if openclaw gateway status 2>/dev/null | grep -qiE "running|reachable"; then
       ok "Gateway работает"
       return 0
     fi
     try=$((try + 1)); sleep 3; heartbeat
   done
-  warn "Gateway не подтвердил статус за 15с — проверьте: openclaw gateway status"
+  # Не дождались за 30с — но gateway уже запущен командой выше; на машинах
+  # без systemd (контейнеры) статус и не подтвердится — это норма.
+  warn "Gateway не подтвердил статус за 30с. Если вы на обычном сервере — проверьте: openclaw gateway status (в контейнере без systemd это ожидаемо)."
 }
