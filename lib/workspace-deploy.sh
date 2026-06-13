@@ -62,7 +62,7 @@ deploy_templates() {
 # Только для сборки «Малый бизнес» — v1-шаблоны живут по своим правилам.
 personalize_workspaces() {
   CURRENT_STAGE="Stage 6c: персонализация"
-  [ "${PRESET_ID:-}" = "smallbiz-team" ] || return 0
+  case "${PRESET_ID:-}" in smallbiz-team|admin-solo) :;; *) return 0;; esac
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Персонализация (dry-run)"; return 0; fi
 
   local a ws f
