@@ -28,7 +28,11 @@ openclaw_install() {
   fi
 
   local cur=""
-  cur="$(openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  # dry-run: уже установленный OpenClaw не запускаем даже для --version —
+  # CLI может писать в ~/.openclaw (логи/состояние), а dry-run не меняет HOME
+  if [ "${AISTACK_DRY_RUN:-0}" != "1" ]; then
+    cur="$(openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  fi
   if [ "$cur" = "$OPENCLAW_PIN" ]; then
     ok "OpenClaw $OPENCLAW_PIN уже установлен"
   else

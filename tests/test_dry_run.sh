@@ -56,6 +56,8 @@ else
   if [ "$before" = "$after" ]; then pass "B: HOME не изменён"
   else fail "B: HOME изменён:"; diff <(echo "$before") <(echo "$after") | sed 's/^/         /'; fi
   forbidden="$(grep -E '^(sudo|curl|wget|npm|apt-get|apt|add-apt-repository|brew|open|xdg-open) ' "$SB_CALLS")"
+  oc="$(grep -E '^openclaw ' "$SB_CALLS")"
+  [ -z "$oc" ] && pass "B: OpenClaw не запускался (даже --version)" || fail "B: dry-run запускал OpenClaw: $oc"
   if [ -z "$forbidden" ]; then pass "B: sudo/сеть/пакетные менеджеры не вызывались"
   else fail "B: запрещённые вызовы:"; echo "$forbidden" | sed 's/^/         /'; fi
   leaked=""
@@ -86,6 +88,33 @@ else
   if grep -qE '^(open|xdg-open) ' "$SB_CALLS"; then
     fail "C: dry-run попытался открыть браузер: $(grep -E '^(open|xdg-open) ' "$SB_CALLS")"
   else pass "C: браузер не открывался"; fi
+fi
+
+
+# ── D) dry-run по macOS-пути: Python не запускается, HOME не меняется ────────
+# На macOS _deps_macos не выставляет PYTHON_BIN, и шаг Hermes раньше вызывал
+# resolve_python — реальный запуск python3 -c. Системный python3 от Apple пишет
+# кэш байткода в ~/Library/Caches/com.apple.python (найдено на Mac-приёмке).
+# Эмуляция на любой ОС: uname → Darwin; python3* — заглушки, которые, как Apple
+# python, пишут кэш в $HOME и отмечают запуск в calls.log.
+rm -rf "$SANDBOX"; new_sandbox; prepare_home; add_sudo_stub
+printf '#!/bin/sh\ncase "$1" in -s) echo Darwin;; -m) echo arm64;; *) exec "%s" "$@";; esac\n' \
+  "$(readlink "$SANDBOX/sys/uname")" > "$SB_BIN/uname"; chmod +x "$SB_BIN/uname"
+for n in python3 python3.11 python3.12 python3.13; do
+  printf '#!/bin/sh\necho "%s $*" >> "%s"\nmkdir -p "$HOME/Library/Caches/com.apple.python" && : > "$HOME/Library/Caches/com.apple.python/probe.pyc"\nexit 0\n' \
+    "$n" "$SB_CALLS" > "$SB_BIN/$n"; chmod +x "$SB_BIN/$n"
+done
+before="$(home_snapshot)"
+dry_run "$SB_TMP/d.log" bash "$REPO_DIR/install.sh" "$KEY" > "$SANDBOX/out.txt" 2>&1
+rc=$?
+after="$(home_snapshot)"
+if ! ran_ok "$rc" "$SB_TMP/d.log"; then not_ran D "$rc"
+else
+  grep -q 'ОС: macos' "$SANDBOX/out.txt" && pass "D: dry-run прошёл по macOS-пути (эмуляция uname=Darwin)" || fail "D: не macOS-путь"
+  py="$(grep -E '^python3' "$SB_CALLS")"
+  [ -z "$py" ] && pass "D: в dry-run Python не запускался" || fail "D: в dry-run запускался Python: $(echo "$py" | head -2 | tr '\n' ';')"
+  if [ "$before" = "$after" ]; then pass "D: HOME не изменён (нет кэша Python)"
+  else fail "D: HOME изменён:"; diff <(echo "$before") <(echo "$after") | sed 's/^/         /'; fi
 fi
 
 finish

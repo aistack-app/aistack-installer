@@ -129,8 +129,8 @@ if [ "$rc" -eq 0 ] && grep -q '^\[dry-run\] ' "$L"; then
   grep -q 'install.ps1 -Tag 2026.6.5 -NoOnboard' "$L" && pass "dry-run: OpenClaw — официальный install.ps1 с пином 2026.6.5" || fail "dry-run: нет шага установки OpenClaw"
   leaked=""; for s in $FK $FT; do grep -qF "$s" "$L" "$SB_TMP/run.out" && leaked="$leaked $s"; done
   [ -z "$leaked" ] && pass "dry-run: секретов нет ни в логе, ни в выводе" || fail "dry-run: утекли$leaked"
-  bad="$(grep -vE '^openclaw --version' "$SB_CALLS")"
-  [ -z "$bad" ] && pass "dry-run: реальные команды не вызывались (кроме openclaw --version)" || fail "dry-run вызвал: $bad"
+  bad="$(cat "$SB_CALLS")"
+  [ -z "$bad" ] && pass "dry-run: ни одна внешняя команда не запускалась (включая openclaw --version)" || fail "dry-run вызвал: $bad"
 else fail "dry-run install.ps1 упал (rc=$rc): $(grep -m2 -E '❌|Exception|error' "$SB_TMP/run.out")"; fi
 
 # ── F) развёртывание 3 ролей + vault: результат совпадает с bash-версией ─────

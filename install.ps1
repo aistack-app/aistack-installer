@@ -467,7 +467,8 @@ function Get-AisOpenClawVersion {
 }
 
 function Install-AisOpenClaw {
-  $cur = Get-AisOpenClawVersion
+  # dry-run: установленный OpenClaw не запускаем даже для --version (CLI может писать в профиль)
+  $cur = if ($script:DryRun) { '' } else { Get-AisOpenClawVersion }
   if ($cur -eq $script:OpenClawPin) { Write-AisOk "OpenClaw $($script:OpenClawPin) уже установлен"; return }
   if ($cur) { Write-AisWarn "Найден OpenClaw $cur — ставлю протестированную версию $($script:OpenClawPin)" }
   if ($script:DryRun) {

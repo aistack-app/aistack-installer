@@ -117,13 +117,16 @@ _has_python_311_or_newer() {
 # Находит лучший python ≥ 3.11 → PYTHON_BIN (используется для venv Hermes)
 resolve_python() {
   local cand
+  # dry-run: Python не запускаем вовсе. На macOS шаг Hermes попадает сюда с
+  # пустым PYTHON_BIN, а системный python3 от Apple при `-c` пишет кэш
+  # байткода в ~/Library/Caches/com.apple.python — dry-run менял бы HOME.
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then PYTHON_BIN="python3"; ok "Python (dry-run, пропуск)"; return 0; fi
   for cand in python3.13 python3.12 python3.11 python3; do
     if command -v "$cand" >/dev/null 2>&1 \
        && "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,11) else 1)' 2>/dev/null; then
       PYTHON_BIN="$(command -v "$cand")"; ok "Python: $PYTHON_BIN ($("$cand" --version 2>&1))"; return 0
     fi
   done
-  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then PYTHON_BIN="python3"; ok "Python (dry-run): python3"; return 0; fi
   err "Не найден Python ≥ 3.11. Hermes требует Python ≥ 3.11."
   exit 1
 }
