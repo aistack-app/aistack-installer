@@ -129,7 +129,7 @@ print_final_marker() {
 
 open_dashboard_prompt() {
   local url="http://localhost:18789"
-  if [ ! -t 0 ]; then echo "  Откройте в браузере: $url"; return 0; fi
+  if [ ! -t 0 ] || [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then echo "  Откройте в браузере: $url"; return 0; fi
   printf "\n  Открыть dashboard сейчас? [Y/n]: "
   local ans=""; read -r ans || ans="n"
   case "${ans:-Y}" in

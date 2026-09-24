@@ -68,6 +68,7 @@ openclaw_install() {
 # умолчанию). Дописываем в rc-файлы только если строки ещё нет.
 _persist_npm_global_path() {
   local line='export PATH="$HOME/.npm-global/bin:$PATH"' rc
+  [ "${AISTACK_DRY_RUN:-0}" = "1" ] && return 0   # dry-run не трогает rc-файлы
   for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
     [ -f "$rc" ] || continue
     grep -qsF '.npm-global/bin' "$rc" || echo "$line" >> "$rc"

@@ -22,7 +22,8 @@ _deps_debian() {
 
   local SUDO=""
   if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else
+    # dry-run: команды только печатаются в лог, sudo не нужен и не вызывается
+    if command -v sudo >/dev/null 2>&1 || [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then SUDO="sudo"; else
       err "Нужны права root для установки системных пакетов, но sudo не найден."
       err "Запустите от root или установите sudo."
       exit 1

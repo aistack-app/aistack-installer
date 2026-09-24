@@ -11,8 +11,22 @@ else
   GRN=""; YEL=""; CYA=""; RED=""; MAG=""; DIM=""; RST=""
 fi
 
-LOG="${AISTACK_LOG:-/tmp/aistack-install.log}"
-: > "$LOG" 2>/dev/null || true
+# Лог только для владельца (600): в нём вывод установки. По умолчанию — уникальный
+# файл через mktemp (не фиксированный путь в /tmp → нельзя подложить симлинк).
+if [ -n "${AISTACK_LOG:-}" ]; then
+  LOG="$AISTACK_LOG"
+  if [ -L "$LOG" ]; then
+    echo "❌ AISTACK_LOG=$LOG — символическая ссылка. Укажите обычный файл." >&2
+    exit 1
+  fi
+  ( umask 077; : > "$LOG" ) 2>/dev/null && chmod 600 "$LOG" 2>/dev/null || true
+else
+  _log_dir="${TMPDIR:-/tmp}"
+  if ! LOG="$(umask 077; mktemp "${_log_dir%/}/aistack-install.XXXXXX" 2>/dev/null)"; then
+    echo "❌ Не удалось создать лог установки в ${_log_dir}. Задайте AISTACK_LOG=<файл>." >&2
+    exit 1
+  fi
+fi
 
 # ── Логирование ─────────────────────────────────────────────────────────────
 say()     { echo "${CYA}▸${RST} $*"; }
@@ -26,7 +40,7 @@ substep() { echo "  ${CYA}↳${RST} $*"; heartbeat; }
 # AISTACK_DRY_RUN=1 → команды только печатаются в лог, не выполняются.
 run() {
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then
-    echo "[dry-run] $*" >> "$LOG"
+    printf '[dry-run] %s\n' "$(mask_secrets "$*")" >> "$LOG"
     return 0
   fi
   "$@" >> "$LOG" 2>&1
@@ -56,7 +70,18 @@ redact() {
   sed -E \
     -e 's/[0-9]{8,12}:[A-Za-z0-9_-]{30,}/[TG_TOKEN]/g' \
     -e 's/sk-[A-Za-z0-9_-]{20,}/sk-[REDACTED]/g' \
+    -e 's/AIza[A-Za-z0-9_-]{30,}/AIza[REDACTED]/g' \
     -e 's/(API_KEY[^=]*=)[^ ]+/\1[REDACTED]/g'
+}
+
+# Маскирует уже известные секреты (API_KEY, TG_TOKENS) буквально — даже если
+# их формат не ловится шаблонами redact — и затем прогоняет через redact.
+mask_secrets() {
+  local s="$*" v
+  for v in "${API_KEY:-}" ${TG_TOKENS[@]+"${TG_TOKENS[@]}"}; do
+    [ -n "$v" ] && s="${s//"$v"/[REDACTED]}"
+  done
+  printf '%s\n' "$s" | redact
 }
 
 # run_step "сообщение" cmd...  → тихо (в лог) + спиннер, фатально при ошибке
