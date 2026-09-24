@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ============================================================================
 # apt-deps.sh — системные зависимости. apt (Debian/Ubuntu, +DEBIAN_FRONTEND из
-# БРИФ-10) / brew (macOS). Python ≥ 3.11 (не хардкод 3.11) и Node ≥ 20 (NodeSource).
+# БРИФ-10) / brew (macOS). Python ≥ 3.11 (не хардкод 3.11) и Node ≥ 22.19 (NodeSource).
 # Выставляет глобально: PYTHON_BIN — интерпретатор для venv Hermes.
 # ============================================================================
 
@@ -128,13 +128,13 @@ resolve_python() {
   exit 1
 }
 
-# ── Node ≥ 20 (FIX: удалить старый apt-Node 12, поставить NodeSource 22) ────────
+# ── Node ≥ 22.19 (FIX: удалить старый apt-Node 12, поставить NodeSource 22) ─────
 # В Ubuntu 22.04 apt даёт Node 12 → OpenClaw падает (nullish `??` = Node 14+).
 # Если старый nodejs уже стоит, NodeSource НЕ заменяет его без явного remove
 # (конфликт distro-nodejs ↔ nodesource) — поэтому сначала сносим, потом ставим.
 ensure_node() {
   local SUDO="$1"
-  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Node.js ≥20 (dry-run, пропуск)"; return 0; fi
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Node.js ≥22.19 (dry-run, пропуск)"; return 0; fi
   if _node_ok; then ok "Node.js свежий ($(node --version 2>/dev/null))"; return 0; fi
 
   # 1) удаляем старый apt-овый nodejs (Node 12), чтобы NodeSource не конфликтовал
@@ -151,19 +151,19 @@ ensure_node() {
   run_step "Ставлю Node.js 22 (включает npm)" $SUDO apt-get install -y nodejs
   hash -r 2>/dev/null || true   # сбрасываем кэш путей bash, чтобы node указывал на новый бинарь
 
-  # 4) проверяем версию — если всё ещё < 20, дальше идти нет смысла (Stage 4 упадёт)
+  # 4) проверяем версию — если всё ещё < 22.19, дальше идти нет смысла (Stage 4 упадёт)
   if _node_ok; then
     ok "Node.js установлен ($(node --version 2>/dev/null))"
   else
-    err "Node.js всё ещё < 20 после NodeSource (сейчас: $(node --version 2>/dev/null || echo 'нет'))."
-    err "OpenClaw требует Node ≥ 20. Проверьте deb.nodesource.com / сеть и запустите заново."
+    err "Node.js всё ещё < 22.19 после NodeSource (сейчас: $(node --version 2>/dev/null || echo 'нет'))."
+    err "OpenClaw $OPENCLAW_PIN требует Node ≥ 22.19. Проверьте deb.nodesource.com / сеть и запустите заново."
     exit 1
   fi
 }
 
-# true, если node ≥ 20
+# true, если node ≥ 22.19 — engines.node пина openclaw@2026.6.5 (">=22.19.0");
+# Node 20/21 и 22.0–22.18 раньше проходили проверку, а OpenClaw на них не заявлен
 _node_ok() {
   command -v node >/dev/null 2>&1 || return 1
-  local major; major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-  [ "${major:-0}" -ge 20 ] 2>/dev/null
+  node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=19)?0:1)' 2>/dev/null
 }

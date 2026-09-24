@@ -9,6 +9,7 @@
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAILS=0
+TEST_TMP_BASE="${TMPDIR:-/tmp}"   # песочницы создаются здесь; внутри теста TMPDIR = песочница
 
 pass() { echo "  ok   - $*"; }
 fail() { echo "  FAIL - $*"; FAILS=$((FAILS + 1)); }
@@ -18,11 +19,13 @@ STUB_CMDS="sudo curl wget npm node openclaw apt-get apt add-apt-repository brew 
 
 # new_sandbox → SANDBOX, SB_HOME, SB_TMP, SB_BIN, SB_CALLS
 new_sandbox() {
-  SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/aistack-test.XXXXXX")"
+  SANDBOX="$(mktemp -d "${TEST_TMP_BASE%/}/aistack-test.XXXXXX")"
   SB_HOME="$SANDBOX/home"; SB_TMP="$SANDBOX/tmp"
   SB_BIN="$SANDBOX/bin"; SB_CALLS="$SANDBOX/calls.log"
   mkdir -p "$SB_HOME" "$SB_TMP" "$SB_BIN" "$SANDBOX/sys"
   : > "$SB_CALLS"
+  # временные файлы, логи и heartbeat всех вызовов — только внутри песочницы
+  export TMPDIR="$SB_TMP" AISTACK_HB="$SB_TMP/hb"
 
   # системные утилиты — симлинками, кроме заглушаемых
   local d f name
@@ -53,13 +56,15 @@ add_sudo_stub() {
 
 sb_path() { echo "$SB_BIN:$SANDBOX/sys"; }
 
-# Снимок HOME: список путей + права + контрольные суммы файлов
-home_snapshot() {
-  ( cd "$SB_HOME" && find . -exec stat -c '%n %a %s' {} + | sort \
-      && find . -type f -exec cksum {} + | sort )
-}
-
+# Права файла: GNU stat (Linux) или BSD stat (macOS)
 file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+
+# Снимок HOME: список путей + права + контрольные суммы файлов (переносимо)
+home_snapshot() {
+  ( cd "$SB_HOME" || exit 1
+    find . | sort | while IFS= read -r p; do printf '%s %s\n' "$p" "$(file_mode "$p")"; done
+    find . -type f -exec cksum {} + | sort )
+}
 
 finish() {
   [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"

@@ -92,25 +92,22 @@ openclaw_verify_memory() {
 # старый вариант молча не работал.
 openclaw_set_provider() {
   CURRENT_STAGE="Stage 6b: provider"
-  case "$PROVIDER" in
-    anthropic)
-      run_soft "Модель по умолчанию: anthropic/claude-sonnet-4-6" \
-        openclaw config set agents.defaults.model.primary "anthropic/claude-sonnet-4-6"
-      run_soft "Сохраняю API-ключ (env.vars)" \
-        openclaw config set env.vars.ANTHROPIC_API_KEY "$API_KEY";;
-    openrouter)
-      run_soft "Сохраняю API-ключ OpenRouter (env.vars)" \
-        openclaw config set env.vars.OPENROUTER_API_KEY "$API_KEY"
-      # Без этого дефолт остаётся openai/* без ключа → каждый ответ бота
-      # падает «Missing API key for provider openai» (поймано на живом VPS).
-      # openrouter/auto — роутер OpenRouter, сам выбирает доступную модель.
-      run_soft "Модель по умолчанию: openrouter/auto" \
-        openclaw config set agents.defaults.model.primary "openrouter/auto";;
-    *)
-      run_soft "Сохраняю API-ключ (env.vars)" \
-        openclaw config set "env.vars.$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY" "$API_KEY"
-      warn "Провайдер $PROVIDER: модель выберите после установки (dashboard → Settings)";;
-  esac
+  local envvar
+  envvar="$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY"
+  run_soft "Сохраняю API-ключ (env.vars.$envvar)" \
+    openclaw config set "env.vars.$envvar" "$API_KEY"
+  # Модель — выбранная в wizard (lib/models.tsv или свой id), а не жёстко
+  # заданная. Без явной модели дефолт OpenClaw может указать на провайдера без
+  # ключа → «Missing API key for provider …» (поймано на живом VPS с OpenRouter).
+  # TO-VERIFY (живой запуск): по docs/providers/openai.md пина агентные
+  # openai/* модели идут через Codex-harness, и одного OPENAI_API_KEY для них
+  # может не хватить (нужен Codex-совместимый auth-профиль). Офлайн не проверить.
+  if [ -n "${MODEL:-}" ]; then
+    run_soft "Модель по умолчанию: $MODEL" \
+      openclaw config set agents.defaults.model.primary "$MODEL"
+  else
+    warn "Модель не выбрана — выберите после установки: openclaw models set <провайдер/модель>"
+  fi
 }
 
 # Регистрация агентов-ботов. Реальный CLI пина (флага --telegram-token НЕ

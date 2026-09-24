@@ -43,7 +43,10 @@ run() {
     printf '[dry-run] %s\n' "$(mask_secrets "$*")" >> "$LOG"
     return 0
   fi
-  "$@" >> "$LOG" 2>&1
+  # вывод команды тоже может содержать секреты (эхо конфига, ошибки CLI) —
+  # маскируем поток; код возврата — самой команды
+  { "$@" 2>&1; } | mask_stream >> "$LOG"
+  return "${PIPESTATUS[0]}"
 }
 
 # ── Спиннер пока жив фоновый процесс $1 ─────────────────────────────────────
@@ -82,6 +85,18 @@ mask_secrets() {
     [ -n "$v" ] && s="${s//"$v"/[REDACTED]}"
   done
   printf '%s\n' "$s" | redact
+}
+
+# То же для потока (stdin → stdout): известные секреты заменяются буквально
+# (спецсимволы экранируются для sed), затем шаблоны redact.
+mask_stream() {
+  local v n=0 args=()
+  for v in "${API_KEY:-}" ${TG_TOKENS[@]+"${TG_TOKENS[@]}"}; do
+    [ -n "$v" ] || continue
+    args+=(-e "s/$(printf '%s' "$v" | sed 's/[][\/.^$*+?(){}|]/\\&/g')/[REDACTED]/g")
+    n=$((n + 1))
+  done
+  if [ "$n" -eq 0 ]; then redact; else sed -E "${args[@]}" | redact; fi
 }
 
 # run_step "сообщение" cmd...  → тихо (в лог) + спиннер, фатально при ошибке
@@ -195,17 +210,18 @@ parse_key() {
   esac
 
   # SMALLBIZ — отдельная вертикаль «Малый бизнес» (5 ботов-отделов),
-  # допустима на любом тарифе (ценовую матрицу решает генератор ключей)
+  # COACH — команда начинающего помогающего эксперта (3 роли); обе допустимы
+  # на любом тарифе (ценовую матрицу решает генератор ключей)
   case " PROFI TEAM PERSONAL " in
     *" $tariff "*)
-      case " FULL SMALLBIZ " in
+      case " FULL SMALLBIZ COACH " in
         *" $preset "*) :;;
-        *) KEY_ERROR="Тариф $tariff требует сборку FULL или SMALLBIZ (в ключе: $preset). Поддержка: @superwalletsru."; return 1;;
+        *) KEY_ERROR="Тариф $tariff требует сборку FULL, SMALLBIZ или COACH (в ключе: $preset). Поддержка: @superwalletsru."; return 1;;
       esac;;
     *)
-      case " CONTENT SALES EXPERT BUSINESS SCHOOL TECH SMALLBIZ ADMIN " in
+      case " CONTENT SALES EXPERT BUSINESS SCHOOL TECH SMALLBIZ ADMIN COACH " in
         *" $preset "*) :;;
-        *) KEY_ERROR="Сборка $preset не существует. Для $tariff допустимы: CONTENT, SALES, EXPERT, BUSINESS, SCHOOL, TECH, SMALLBIZ, ADMIN."; return 1;;
+        *) KEY_ERROR="Сборка $preset не существует. Для $tariff допустимы: CONTENT, SALES, EXPERT, BUSINESS, SCHOOL, TECH, SMALLBIZ, ADMIN, COACH."; return 1;;
       esac;;
   esac
 
@@ -223,6 +239,9 @@ parse_key() {
     FULL)     PRESET_ID="full-team";     AGENTS="coordinator tech producer marketer designer copywriter contentmaker negotiator";;
     SMALLBIZ) PRESET_ID="smallbiz-team"; AGENTS="voice pero rost chasy khozyain";;
     ADMIN)    PRESET_ID="admin-solo";    AGENTS="admin";;
+    # coordinator здесь — координатор-технарь (своя версия шаблона в
+    # templates/_presets/coach-team/), отдельного агента tech в сборке нет
+    COACH)    PRESET_ID="coach-team";    AGENTS="coordinator designer copywriter";;
   esac
   AGENT_COUNT=$(printf '%s\n' $AGENTS | grep -c .)
 

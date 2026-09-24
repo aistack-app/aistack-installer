@@ -24,6 +24,11 @@ if [ -n "$_dir" ] && [ -f "$_dir/lib/helpers.sh" ]; then
   done
 else
   _tmp="$(mktemp -d)"
+  # офлайн-список моделей для выбора при установке (читает wizard.sh рядом с собой)
+  if ! curl -fsSL "$AISTACK_BASE_URL/lib/models.tsv" -o "$_tmp/models.tsv"; then
+    echo "❌ Не удалось скачать lib/models.tsv с $AISTACK_BASE_URL. Проверьте интернет." >&2
+    exit 1
+  fi
   for m in $LIBS; do
     if ! curl -fsSL "$AISTACK_BASE_URL/lib/$m.sh" -o "$_tmp/$m.sh"; then
       echo "❌ Не удалось скачать lib/$m.sh с $AISTACK_BASE_URL. Проверьте интернет." >&2
@@ -55,7 +60,13 @@ main() {
   ok "Ключ принят · тариф: ${TARIFF} · сборка: ${PRESET_ID} · агентов: ${AGENT_COUNT}"
   $HAS_LESSONS && say "Доступ к урокам включён в ваш тариф."
 
-  start_watchdog 600
+  # ── Настройка ДО установки: ключ, модель, токены, память ───────────────────
+  # Раньше wizard шёл на Stage 6: без ключей отказ случался после ~10 минут
+  # установки, Hermes (Stage 3) писал в .env ещё пустой ключ, а watchdog мог
+  # убить процесс, пока клиент заводит ботов в BotFather (ввод не шлёт heartbeat).
+  run_wizard
+
+  start_watchdog 600   # дальше установка идёт без участия человека
 
   # ── Stage 1: preflight ────────────────────────────────────────────────────
   stage "STAGE 1/8 · проверка системы"
@@ -84,10 +95,10 @@ main() {
   stage "STAGE 5/8 · шаблоны команды"
   deploy_templates
 
-  # ── Stage 6: wizard (ключ + токены + проект) ──────────────────────────────
-  stage "STAGE 6/8 · настройка"
-  run_wizard
+  # ── Stage 6: настройка команды (ответы wizard собраны в начале) ───────────
+  stage "STAGE 6/8 · настройка команды"
   save_api_key
+  create_vault
   personalize_workspaces
 
   # ── Stage 7: регистрация агентов-ботов ────────────────────────────────────
@@ -116,6 +127,8 @@ print_final_marker() {
   echo "  ✓ OpenClaw:          ~/.openclaw/  (dashboard :18789)"
   echo "  ✓ Сборка:            ${PRESET_ID} (${TARIFF})"
   echo "  ✓ Агенты:            ${AGENT_COUNT}/${AGENT_COUNT} — ${AGENTS}"
+  echo "  ✓ Модель:            ${MODEL:-не выбрана (openclaw models set)}"
+  [ -n "${VAULT_PATH:-}" ] && echo "  ✓ Память команды:    ${VAULT_PATH}  (можно открыть в Obsidian)"
   echo ""
   echo "  📊 Dashboard:        http://localhost:18789"
   echo "  💬 Первый агент:     напишите боту в Telegram «привет»"
