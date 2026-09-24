@@ -30,7 +30,8 @@ _sed_repl() { printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'; }
 
 deploy_templates() {
   CURRENT_STAGE="Stage 5: workspace templates"
-  local tgz="/tmp/aistack-knowledge.tar.gz" exdir="/tmp/aistack-knowledge-extract"
+  # в приватном рабочем каталоге запуска, а не по фиксированным путям в /tmp
+  local tgz="$AISTACK_WORK/templates.tar.gz" exdir="$AISTACK_WORK/templates"
 
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then
     for a in $AGENTS; do

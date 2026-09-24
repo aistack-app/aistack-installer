@@ -40,7 +40,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\aistack-install.p
 3. Hermes runtime — через PyPI-пакет `hermes-agent` в свой venv (**без Chromium** → ARM-safe)
 4. OpenClaw — `npm install -g openclaw`
 5. Шаблоны команды — тянет с публичного репо шаблонов
-6. Сохраняет ключ и модель в OpenClaw, создаёт vault (COACH), персонализирует шаблоны
+6. Сохраняет ключ и модель в OpenClaw, создаёт vault (COACH), персонализирует шаблоны.
+   Секреты не передаются аргументами команд (их видно через `ps`): ключ — через
+   `openclaw config patch --file` (временный файл 600, удаляется), токены ботов —
+   `--token-file` из `~/.openclaw/aistack-secrets/telegram-<роль>.token` (600; файл
+   остаётся — OpenClaw читает его при работе). Временные файлы — в приватном
+   каталоге запуска (`mktemp -d`), удаляется при выходе.
 7. Регистрирует агентов
 8. Запускает и показывает dashboard `http://localhost:18789`
 
@@ -76,8 +81,10 @@ AISTACK_DRY_RUN=1 bash install.sh AIS-START-COACH-TEST0001
 ```bash
 bash tests/run.sh
 ```
-Офлайн, в песочнице (свой HOME/TMPDIR, заглушки sudo/curl/npm/openclaw/браузера),
-только выдуманные ключи. Проверки Windows-установщика выполняются, если есть `pwsh`
+Офлайн, в песочнице (свой HOME/TMPDIR, заглушки sudo/curl/npm/openclaw/python/браузера),
+только выдуманные ключи. `test_first_run` — реальный (не dry-run) первый запуск COACH
+с тремя ботами на заглушках: порядок команд, доставка ключа/токенов файлами, отсутствие
+секретов в аргументах любых процессов, отсутствие записи вне временных каталогов. Проверки Windows-установщика выполняются, если есть `pwsh`
 (иначе — явный SKIP); это не замена прогону на реальной Windows.
 
 ## Переменные окружения (для отладки/CI)
@@ -87,7 +94,7 @@ bash tests/run.sh
 | `AISTACK_NONINTERACTIVE=1` | без интерактива (брать ключ/токены из env) |
 | `AISTACK_API_KEY` | API-ключ в неинтерактивном режиме (обязателен вне dry-run) |
 | `AISTACK_TG_TOKENS` | TG-токены через пробел — ровно по одному на агента |
-| `AISTACK_PROVIDER` | провайдер, если его не видно по ключу (`openai` по умолчанию) |
+| `AISTACK_PROVIDER` | провайдер, если его не видно по ключу (`openai` по умолчанию; `AIza…` → `google`) |
 | `AISTACK_MODEL` | модель `провайдер/модель` (по умолчанию — рекомендованная из `lib/models.tsv`) |
 | `AISTACK_VAULT` | папка памяти команды для COACH (по умолчанию `~/AIStack-Vault`) |
 | `AISTACK_TEMPLATES_DIR` | локальный каталог шаблонов вместо скачивания (тесты, разработка) |

@@ -27,6 +27,9 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+# Windows PowerShell 5.1 на части систем по умолчанию не включает TLS 1.2 для
+# Invoke-WebRequest — без него скачивание с GitHub/openclaw.ai падает
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
 $script:OpenClawPin  = if ($env:AISTACK_OPENCLAW_PIN) { $env:AISTACK_OPENCLAW_PIN } else { '2026.6.5' }
 $script:BaseUrl      = if ($env:AISTACK_BASE_URL) { $env:AISTACK_BASE_URL } else { 'https://aistack-app.github.io/aistack-installer' }
@@ -34,6 +37,7 @@ $script:TemplatesZip = if ($env:AISTACK_TEMPLATES_ZIP_URL) { $env:AISTACK_TEMPLA
 $script:DryRun       = [bool]$DryRun -or ($env:AISTACK_DRY_RUN -eq '1')
 $script:Utf8         = New-Object System.Text.UTF8Encoding $false
 $script:ApiKey       = ''
+$script:Work         = ''
 $script:TgTokens     = @()
 
 # ── Вывод ────────────────────────────────────────────────────────────────────
@@ -199,7 +203,7 @@ function Get-AisTgTokenProblem([string]$t) {
 function Get-AisProvider([string]$k) {
   if ($k.StartsWith('sk-ant-')) { return 'anthropic' }
   if ($k.StartsWith('sk-or-')) { return 'openrouter' }
-  if ($k.StartsWith('AIza')) { return 'gemini' }
+  if ($k.StartsWith('AIza')) { return 'google' }   # id провайдера в OpenClaw (ключ — GEMINI_API_KEY)
   if ($env:AISTACK_PROVIDER) { return $env:AISTACK_PROVIDER }
   return 'openai'   # sk-… и неизвестный формат: клиенты чаще всего на GPT
 }
@@ -486,9 +490,42 @@ function Install-AisOpenClaw {
   Write-AisOk "OpenClaw OK ($cur)"
 }
 
+# ── Секреты — файлами, а не аргументами (argv виден другим процессам) ──────
+# Рабочий каталог запуска: уникальный, во временной папке пользователя, удаляется в конце.
+function Get-AisWork {
+  if (-not $script:Work) {
+    $script:Work = Join-Path ([IO.Path]::GetTempPath()) ('aistack-work-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $script:Work | Out-Null
+  }
+  return $script:Work
+}
+function Protect-AisFile([string]$Path) {
+  # На Windows файлы в профиле пользователя закрыты его ACL; на macOS/Linux (pwsh) — chmod 600
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { & chmod 600 $Path }
+}
+# Invoke-AisPatch <текст JSON5> <сообщение> — openclaw config patch --file (файл удаляется)
+function Invoke-AisPatch([string]$Json5, [string]$Msg) {
+  $f = Join-Path (Get-AisWork) ('patch-' + [Guid]::NewGuid().ToString('N') + '.json5')
+  if (-not $script:DryRun) { [IO.File]::WriteAllText($f, $Json5, $script:Utf8); Protect-AisFile $f }
+  try { Invoke-AisStep $Msg 'openclaw' @('config', 'patch', '--file', $f) -Soft | Out-Null }
+  finally { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
+}
+function ConvertTo-AisJsonStr([string]$v) { return '"' + $v.Replace('\', '\\').Replace('"', '\"') + '"' }
+# Файл токена бота: постоянный (OpenClaw хранит путь tokenFile и читает его при работе)
+function Get-AisTokenFile([string]$Account, [string]$Token) {
+  $d = Join-Path (Join-Path (Get-AisHome) '.openclaw') 'aistack-secrets'
+  $f = Join-Path $d "telegram-$Account.token"
+  if (-not $script:DryRun) {
+    if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { & chmod 700 $d }
+    [IO.File]::WriteAllText($f, $Token, $script:Utf8); Protect-AisFile $f
+  }
+  return $f
+}
+
 function Set-AisProvider {
-  $envvar = $script:Provider.ToUpperInvariant() + '_API_KEY'
-  Invoke-AisStep "Сохраняю API-ключ (env.vars.$envvar)" 'openclaw' @('config', 'set', "env.vars.$envvar", $script:ApiKey) -Soft | Out-Null
+  $envvar = if ($script:Provider -eq 'google') { 'GEMINI_API_KEY' } else { $script:Provider.ToUpperInvariant() + '_API_KEY' }
+  Invoke-AisPatch ('{ env: { vars: { ' + $envvar + ': ' + (ConvertTo-AisJsonStr $script:ApiKey) + ' } } }') "Сохраняю API-ключ (env.vars.$envvar, через файл)"
   # TO-VERIFY (живой запуск): агентные openai/* модели по документации пина идут
   # через Codex-harness; одного OPENAI_API_KEY может не хватить.
   if ($script:Model) {
@@ -501,17 +538,17 @@ function Register-AisBots($K) {
   $agents = @($K.Agents -split ' '); $ok = 0
   for ($i = 0; $i -lt $agents.Count; $i++) {
     $a = $agents[$i]
-    Invoke-AisStep "Telegram-аккаунт: $a" 'openclaw' @('channels', 'add', '--channel', 'telegram', '--account', $a, '--token', $script:TgTokens[$i]) -Soft | Out-Null
+    $tf = Get-AisTokenFile $a $script:TgTokens[$i]
+    Invoke-AisStep "Telegram-аккаунт: $a" 'openclaw' @('channels', 'add', '--channel', 'telegram', '--account', $a, '--token-file', $tf) -Soft | Out-Null
     $code = Invoke-AisNative 'openclaw' @('agents', 'add', $a, '--non-interactive', '--workspace', (Join-Path $wsBase "workspace-$a"), '--bind', "telegram:$a")
     if ($code -eq 0) { $ok++; Write-AisOk "Агент: $a" } else { Write-AisWarn "Агент $a`: agents add не отработал (возможно, уже существует) — см. лог $($script:Log)" }
-    if ($script:OwnerTgId) {
-      Invoke-AisStep "Доступ владельцу: $a" 'openclaw' @('config', 'set', "channels.telegram.accounts.$a.dmPolicy", 'allowlist') -Soft | Out-Null
-      Invoke-AisStep "Доступ владельцу (список): $a" 'openclaw' @('config', 'set', "channels.telegram.accounts.$a.allowFrom", ('["' + $script:OwnerTgId + '"]'), '--strict-json') -Soft | Out-Null
-    }
     if (-not $script:DryRun -and $i -lt $agents.Count - 1) { Start-Sleep -Seconds 2 }
   }
   if ($script:OwnerTgId) {
-    Invoke-AisStep "Владелец команд: $($script:OwnerTgId)" 'openclaw' @('config', 'set', 'commands.ownerAllowFrom', ('["telegram:' + $script:OwnerTgId + '"]'), '--strict-json') -Soft | Out-Null
+    # Одним файлом-патчем: в аргументах native-команд нет кавычек, которые
+    # Windows PowerShell 5.1 (legacy-передача аргументов) срезал бы: ["123"] → [123]
+    $acc = @(); foreach ($a in $agents) { $acc += ($a + ': { dmPolicy: "allowlist", allowFrom: ["' + $script:OwnerTgId + '"] }') }
+    Invoke-AisPatch ('{ channels: { telegram: { accounts: { ' + ($acc -join ', ') + ' } } }, commands: { ownerAllowFrom: ["telegram:' + $script:OwnerTgId + '"] } }') "Доступ только владельцу: $($script:OwnerTgId)"
   }
   Write-AisOk "Зарегистрировано агентов: $ok/$($agents.Count)"
   if (-not $script:DryRun) {
@@ -604,4 +641,5 @@ if (-not $script:ModelsFile -or -not (Test-Path -LiteralPath $script:ModelsFile)
   try { Invoke-WebRequest -UseBasicParsing -Uri ($script:BaseUrl + '/lib/models.tsv') -OutFile $script:ModelsFile }
   catch { Write-AisErr "Не удалось скачать lib/models.tsv с $($script:BaseUrl). Проверьте интернет."; exit 1 }
 }
-Invoke-AisMain
+try { Invoke-AisMain }
+finally { if ($script:Work -and (Test-Path -LiteralPath $script:Work)) { Remove-Item -LiteralPath $script:Work -Recurse -Force } }

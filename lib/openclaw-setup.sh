@@ -92,10 +92,22 @@ openclaw_verify_memory() {
 # старый вариант молча не работал.
 openclaw_set_provider() {
   CURRENT_STAGE="Stage 6b: provider"
-  local envvar
-  envvar="$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY"
-  run_soft "Сохраняю API-ключ (env.vars.$envvar)" \
-    openclaw config set "env.vars.$envvar" "$API_KEY"
+  local envvar f
+  case "$PROVIDER" in
+    google) envvar="GEMINI_API_KEY";;   # docs/providers/google.md пина
+    *)      envvar="$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY";;
+  esac
+  # Ключ — через файл-патч (600, приватный каталог), а не аргументом:
+  # argv виден всем пользователям машины (ps). `config patch` сливает объекты.
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then
+    f="$AISTACK_WORK/provider-key.json5"
+  else
+    f="$(mktemp "$AISTACK_WORK/provider-key.XXXXXX")"
+    printf '{ env: { vars: { %s: "%s" } } }\n' "$envvar" "$(_json_str "$API_KEY")" > "$f"
+  fi
+  run_soft "Сохраняю API-ключ (env.vars.$envvar, через файл)" \
+    openclaw config patch --file "$f"
+  rm -f "$f"
   # Модель — выбранная в wizard (lib/models.tsv или свой id), а не жёстко
   # заданная. Без явной модели дефолт OpenClaw может указать на провайдера без
   # ключа → «Missing API key for provider …» (поймано на живом VPS с OpenRouter).
@@ -121,10 +133,11 @@ register_bots() {
   for a in $AGENTS; do
     tok="${TG_TOKENS[$i]:-}"
     if [ -n "$tok" ]; then
-      # именно --token: --bot-token телеграмом не принимается
-      # («Telegram requires token or --token-file») — поймано Docker-тестом
+      # --token-file, а не --token: токен не попадает в argv (виден через ps).
+      # OpenClaw хранит путь (tokenFile) и читает файл при работе — файл остаётся.
+      # («Telegram requires token or --token-file» — поймано Docker-тестом)
       run_soft "Telegram-аккаунт: $a" \
-        openclaw channels add --channel telegram --account "$a" --token "$tok"
+        openclaw channels add --channel telegram --account "$a" --token-file "$(tg_token_file "$a" "$tok")"
     fi
     if ( run openclaw agents add "$a" --non-interactive \
            --workspace "$WORKSPACE_BASE/workspace-$a" --bind "telegram:$a" ); then
@@ -165,6 +178,19 @@ register_bots() {
       exit 1
     fi
   fi
+}
+
+# tg_token_file <аккаунт> <токен> → путь к файлу токена (600, каталог 700).
+# Файл постоянный: channels.telegram.accounts.<id>.tokenFile читается gateway
+# при работе. В dry-run файл не создаётся. Токен пишется встроенным printf.
+tg_token_file() {
+  local d="$WORKSPACE_BASE/aistack-secrets" f
+  f="$d/telegram-$1.token"
+  if [ "${AISTACK_DRY_RUN:-0}" != "1" ]; then
+    ( umask 077; mkdir -p "$d" ) && chmod 700 "$d"
+    ( umask 077; printf '%s' "$2" > "$f" ) && chmod 600 "$f"
+  fi
+  printf '%s' "$f"
 }
 
 # Рантайм сборки «Малый бизнес»: событийная шина + интервалы HEARTBEAT

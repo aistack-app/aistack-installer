@@ -56,6 +56,61 @@ add_sudo_stub() {
 
 sb_path() { echo "$SB_BIN:$SANDBOX/sys"; }
 
+# add_e2e_stubs — заглушки для РЕАЛЬНОГО (не dry-run) прогона install.sh:
+# все внешние команды «успешны», ничего не ставят и в сеть не ходят; каждый
+# вызов пишется в calls.log (argv), файлы, переданные openclaw, — в files.log.
+# sed/grep/awk оборачиваются регистратором argv: так видно секрет в аргументах
+# ЛЮБОГО процесса (ps показывает argv всем пользователям машины).
+add_e2e_stubs() {
+  local name real
+  cat > "$SB_BIN/_rec" <<'STUB'
+#!/bin/sh
+n="${0##*/}"
+echo "$n $*" >> "$E2E_CALLS"
+argval() { k="$1"; shift; prev=""; for a in "$@"; do [ "$prev" = "$k" ] && { echo "$a"; return; }; prev="$a"; done; }
+fmode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
+case "$n" in
+  openclaw)
+    case "$1 $2" in
+      "--version "*) echo "OpenClaw 2026.6.5";;
+      "gateway status") echo "Gateway: running";;
+      "config patch")
+        f="$(argval --file "$@")"
+        if [ -f "$f" ]; then
+          echo "PATCH mode=$(fmode "$f") dir=$(fmode "$(dirname "$f")")" >> "$E2E_CALLS.files"
+          cat "$f" >> "$E2E_CALLS.patches"; echo >> "$E2E_CALLS.patches"
+        else echo "PATCH missing:$f" >> "$E2E_CALLS.files"; fi;;
+      "channels add")
+        f="$(argval --token-file "$@")"; a="$(argval --account "$@")"
+        if [ -n "$f" ] && [ -f "$f" ]; then
+          echo "TOKEN $a mode=$(fmode "$f") dir=$(fmode "$(dirname "$f")") sum=$(cksum < "$f" | cut -d' ' -f1)" >> "$E2E_CALLS.files"
+        fi;;
+    esac; exit 0;;
+  python3*)
+    [ "$1" = "-m" ] && [ "$2" = "venv" ] && { mkdir -p "$3/bin"; for b in python pip hermes; do cp "$0" "$3/bin/$b"; done; }
+    exit 0;;
+  hermes) [ "$1 $2" = "gateway status" ] && echo "Gateway is running"; exit 0;;
+  curl)
+    out="$(argval -o "$@")"
+    if [ -n "$out" ]; then   # «скачивание» шаблонов = tarball из рабочей копии репо
+      d="$(mktemp -d)"; mkdir -p "$d/aistack-app-aistack-installer-e2e"
+      cp -R "$E2E_REPO/templates" "$d/aistack-app-aistack-installer-e2e/"
+      tar -czf "$out" -C "$d" . && rm -rf "$d"
+    fi; exit 0;;
+  *) exit 0;;
+esac
+STUB
+  chmod +x "$SB_BIN/_rec"
+  for name in openclaw npm node curl wget apt-get apt add-apt-repository brew sudo hermes python3 python3.11 python3.12 python3.13 open xdg-open; do
+    rm -f "$SB_BIN/$name" "$SANDBOX/sys/$name"; ln -s "$SB_BIN/_rec" "$SB_BIN/$name"
+  done
+  for name in sed grep awk; do
+    real="$(readlink "$SANDBOX/sys/$name")"
+    printf '#!/bin/sh\necho "%s $*" >> "$E2E_CALLS.argv"\nexec "%s" "$@"\n' "$name" "$real" > "$SB_BIN/$name"
+    chmod +x "$SB_BIN/$name"
+  done
+}
+
 # Права файла: GNU stat (Linux) или BSD stat (macOS)
 file_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 

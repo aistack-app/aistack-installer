@@ -28,6 +28,11 @@ out="$(psq -Command '
   if ($bad) { "PS7: " + (($bad | % { "{0}:{1}" -f $_.Extent.StartLineNumber,$_.Text }) -join ", ") } else { "OK" }' 2>&1)"
 [ "$out" = "OK" ] && pass "синтаксис разбирается; нет конструкций только PowerShell 7 (&&, ||, ??, ?., тернарный ?)" \
   || fail "синтаксис: $out"
+# параметры/переменные, которых нет в Windows PowerShell 5.1 (парсер PS7 их не отличает)
+ps6="$(grep -nE -- '-AsHashtable|-AdditionalChildPath|-AsByteStream|utf8NoBOM|-SkipCertificateCheck|-Parallel|\$IsWindows|\$IsLinux|\$IsMacOS|Get-Error|Test-Json|-NoProxy|-ResponseHeadersVariable|-StatusCodeVariable|ConvertFrom-Json[^|]*-Depth|Join-Path [^|]*-ChildPath [^|]*[^)] [^|-]' "$PS1")"
+[ -z "$ps6" ] && pass "нет параметров/переменных, появившихся только в PowerShell 6+" || fail "PS6+: $ps6"
+iwr="$(grep -n 'Invoke-WebRequest' "$PS1" | grep -v 'UseBasicParsing' | grep -v '^[0-9]*: *#')"
+[ -z "$iwr" ] && pass "Invoke-WebRequest везде с -UseBasicParsing (в 5.1 иначе нужен движок IE)" || fail "iwr без -UseBasicParsing: $iwr"
 
 # ── B) паритет с bash на одних и тех же входах ───────────────────────────────
 IN="$SB_TMP/parity.tsv"
@@ -43,7 +48,8 @@ IN="$SB_TMP/parity.tsv"
   for t in "" 000000:DEV-PLACEHOLDER-1 not-a-token 111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001 \
            12345:short 111111111:FAKE-token_FAKEtokenFAKEtokenFAKE; do printf 'tg\t%s\n' "$t"; done
   for k in sk-ant-FAKE sk-or-FAKE AIzaFAKE sk-proj-FAKE proxy-FAKE ""; do printf 'prov\t%s\n' "$k"; done
-  for p in openai anthropic openrouter gemini; do printf 'defmodel\t%s\nmodels\t%s\n' "$p" "$p"; done
+  for p in openai anthropic openrouter google gemini; do printf 'defmodel\t%s\nmodels\t%s\n' "$p" "$p"; done
+  printf 'modelp\tgoogle\tgoogle/gemini-3.1-pro-preview\nmodelp\tgoogle\tgemini/gemini-3.1-pro\n'
   printf 'modelp\topenai\topenai/gpt-5.5\nmodelp\topenai\tanthropic/claude-sonnet-4-6\nmodelp\topenai\tgpt 5\n'
   printf 'modelp\topenai\t\nmodelp\tanthropic\tanthropic/claude-opus-4-8\nmodelp\topenai\tOpenAI/GPT\n'
   for v in "" relative "$SB_HOME" "$SB_HOME/" "$SB_HOME/.openclaw" "$SB_HOME/.openclaw/v" "$SB_HOME/.openclawx" \
@@ -148,5 +154,41 @@ if [ "$(norm "$HB")" = "$(norm "$HP")" ] && [ -n "$(norm "$HP")" ]; then
 else
   fail "развёртывание PowerShell ≠ bash:"; diff <(norm "$HB") <(norm "$HP") | head -15 | sed 's/^/         /'
 fi
+
+
+# ── G) реальный (не dry-run) прогон install.ps1 на заглушках: 3 бота ─────────
+rm -rf "$SANDBOX"; new_sandbox; add_e2e_stubs
+tmp_before="$(ls -A "$TEST_TMP_BASE" | grep -v '^aistack-test\.' | sort)"
+KEY="sk-proj-FAKEe2eFAKEe2eFAKEe2eFAKE01"
+T1="111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001"; T2="222222222:FAKEtokenFAKEtokenFAKEtokenFAKE0002"
+T3="333333333:FAKEtokenFAKEtokenFAKEtokenFAKE0003"
+env -u AISTACK_DRY_RUN -u AISTACK_HB HOME="$SANDBOX/pwsh-home" USERPROFILE="$SB_HOME" PATH="$SB_BIN:$PATH" TMPDIR="$SB_TMP" \
+  AISTACK_TEST_ALLOW_NONWINDOWS=1 AISTACK_NONINTERACTIVE=1 AISTACK_TEMPLATES_DIR="$REPO_DIR/templates" \
+  AISTACK_API_KEY="$KEY" AISTACK_TG_TOKENS="$T1 $T2 $T3" AISTACK_OWNER_TG_ID=123456789 AISTACK_BUSINESS="Нина Лебедева" \
+  AISTACK_LOG="$SB_TMP/ps-e2e.log" E2E_CALLS="$SB_CALLS" E2E_REPO="$REPO_DIR" \
+  pwsh -NoLogo -NoProfile -NonInteractive -File "$PS1" AIS-START-COACH-TEST0001 > "$SB_TMP/ps-e2e.out" 2>&1 </dev/null
+rc=$?
+tmp_after="$(ls -A "$TEST_TMP_BASE" | grep -v '^aistack-test\.' | sort)"
+if [ "$rc" -eq 0 ] && grep -q 'AIStack установлен' "$SB_TMP/ps-e2e.out"; then pass "реальный прогон install.ps1 на заглушках (rc=0)"
+else fail "реальный прогон install.ps1 упал (rc=$rc): $(grep -m2 -E '❌|Exception' "$SB_TMP/ps-e2e.out" | tr '\n' ' ')"; fi
+ok=1; i=0
+for a in coordinator designer copywriter; do
+  i=$((i+1)); eval "t=\$T$i"; want="$(printf '%s' "$t" | cksum | cut -d' ' -f1)"
+  grep -qxF "openclaw agents add $a --non-interactive --workspace $SB_HOME/.openclaw/workspace-$a --bind telegram:$a" "$SB_CALLS" || { ok=0; echo "         нет agents add $a"; }
+  case "$(grep "^TOKEN $a " "$SB_CALLS.files")" in *"mode=600 dir=700 sum=$want") :;; *) ok=0; echo "         токен $a не файлом/не тот";; esac
+done
+[ "$ok" = 1 ] && pass "3 бота: токены файлами (каждой роли — её), агенты с привязкой telegram:<роль>" || fail "регистрация ботов (PowerShell)"
+grep -qF "OPENAI_API_KEY: \"$KEY\"" "$SB_CALLS.patches" && grep -q 'ownerAllowFrom: \["telegram:123456789"\]' "$SB_CALLS.patches" \
+  && pass "ключ и список доступа владельца переданы файлами-патчами" || fail "патчи: $(head -c 300 "$SB_CALLS.patches" 2>/dev/null | sed "s/$KEY/<KEY>/")"
+leak=""; for s in "$KEY" "$T1" "$T2" "$T3"; do
+  grep -qF "$s" "$SB_CALLS" && leak="$leak argv"; grep -qF "$s" "$SB_TMP/ps-e2e.log" && leak="$leak лог"; grep -qF "$s" "$SB_TMP/ps-e2e.out" && leak="$leak вывод"
+done
+[ -z "$leak" ] && pass "секретов нет в аргументах процессов, логе и выводе" || fail "утечка:$leak"
+q="$(grep '^openclaw ' "$SB_CALLS" | grep -F '"')"
+[ -z "$q" ] && pass "в аргументах openclaw нет кавычек (legacy-передача аргументов PowerShell 5.1 не исказит)" || fail "кавычки в argv: $q"
+[ -z "$(ls -A "$SB_TMP" | grep '^aistack-work-')" ] && pass "рабочий каталог с временными патчами удалён" || fail "остался: $(ls "$SB_TMP")"
+[ "$tmp_before" = "$tmp_after" ] && pass "вне песочницы в $TEST_TMP_BASE ничего не создано" || fail "в $TEST_TMP_BASE появилось: $(comm -13 <(echo "$tmp_before") <(echo "$tmp_after") | tr '\n' ' ')"
+top="$(ls -A "$SB_HOME" | sort | tr '\n' ' ')"
+[ "$top" = ".openclaw AIStack-Vault " ] && pass "в профиле только ожидаемое: $top" || fail "в профиле: $top"
 
 finish

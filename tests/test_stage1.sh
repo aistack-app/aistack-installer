@@ -128,18 +128,33 @@ chk "меню: Enter → рекомендованная" "$(am openai '\n')" "op
 chk "меню: номер 2" "$(am openai '2\n')" "openai/gpt-5.4-mini"
 chk "меню: ошибка, затем свой id" "$(am openai 'anthropic/x\nopenai/custom-2\n')" "openai/custom-2"
 
-# конфиг OpenClaw получает выбранную модель (заглушка openclaw пишет вызовы)
-printf '#!/bin/sh\necho "openclaw $*" >> "%s"\nexit 0\n' "$SB_CALLS" > "$SB_BIN/openclaw"; chmod +x "$SB_BIN/openclaw"
-: > "$SB_CALLS"
-env -u AISTACK_DRY_RUN PATH="$SB_BIN:$PATH" HOME="$SB_HOME" bash -c '
-  . "$0/lib/helpers.sh"; . "$0/lib/wizard.sh"; . "$0/lib/openclaw-setup.sh"
-  PROVIDER=openai; MODEL=openai/gpt-5.4-mini; API_KEY=sk-proj-FAKEFAKEFAKEFAKEFAKE01; TG_TOKENS=()
-  openclaw_set_provider' "$REPO_DIR" >/dev/null 2>&1
+# конфиг OpenClaw получает выбранную модель; ключ — файлом-патчем под нужным
+# именем переменной (заглушка openclaw пишет argv и содержимое --file)
+cat > "$SB_BIN/openclaw" <<STUB
+#!/bin/sh
+echo "openclaw \$*" >> "$SB_CALLS"
+prev=""; for a in "\$@"; do [ "\$prev" = "--file" ] && cat "\$a" >> "$SB_CALLS.patches"; prev="\$a"; done
+exit 0
+STUB
+chmod +x "$SB_BIN/openclaw"
+setprov() {  # setprov <провайдер> <модель> <ключ>
+  : > "$SB_CALLS"; : > "$SB_CALLS.patches"
+  env -u AISTACK_DRY_RUN PATH="$SB_BIN:$PATH" HOME="$SB_HOME" bash -c '
+    . "$0/lib/helpers.sh"; . "$0/lib/wizard.sh"; . "$0/lib/workspace-deploy.sh"; . "$0/lib/openclaw-setup.sh"
+    PROVIDER="$1"; MODEL="$2"; API_KEY="$3"; TG_TOKENS=()
+    openclaw_set_provider' "$REPO_DIR" "$@" >/dev/null 2>&1
+}
+setprov openai openai/gpt-5.4-mini sk-proj-FAKEFAKEFAKEFAKEFAKE01
 grep -q '^openclaw config set agents.defaults.model.primary openai/gpt-5.4-mini$' "$SB_CALLS" \
   && pass "в конфиг OpenClaw уходит выбранная модель" || fail "модель в конфиг не ушла: $(cat "$SB_CALLS")"
-grep -q '^openclaw config set env.vars.OPENAI_API_KEY ' "$SB_CALLS" \
-  && pass "ключ OpenAI сохраняется в env.vars.OPENAI_API_KEY" || fail "ключ не сохранён: $(cut -c1-60 "$SB_CALLS")"
+grep -qF 'OPENAI_API_KEY: "sk-proj-FAKEFAKEFAKEFAKEFAKE01"' "$SB_CALLS.patches" && ! grep -qF 'sk-proj-FAKE' "$SB_CALLS" \
+  && pass "ключ OpenAI → env.vars.OPENAI_API_KEY через файл-патч (не аргументом)" || fail "ключ OpenAI: $(cut -c1-80 "$SB_CALLS")"
 grep -q 'claude-sonnet' "$SB_CALLS" && fail "осталась жёстко заданная модель" || pass "жёстко заданной модели больше нет"
+setprov google google/gemini-3.1-pro-preview AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE00
+grep -qF 'GEMINI_API_KEY: "AIzaFAKE' "$SB_CALLS.patches" && grep -q 'model.primary google/gemini-3.1-pro-preview$' "$SB_CALLS" \
+  && pass "ключ Google (AIza…) → GEMINI_API_KEY, модель google/…" || fail "Google: $(cat "$SB_CALLS.patches" | cut -c1-60)"
+chk "ключ AIza… → провайдер google и его модель по умолчанию" "$(wz AISTACK_API_KEY=AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE00)" "0|google|google/gemini-3.1-pro-preview|$SB_HOME/AIStack-Vault"
+chk "меню: номер вне списка, затем Enter" "$(am openai '7\n0\n\n')" "openai/gpt-5.5"
 
 # ── 5) Полный dry-run сборки COACH ───────────────────────────────────────────
 rm -rf "$SANDBOX"; new_sandbox; add_sudo_stub

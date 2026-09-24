@@ -7,3 +7,4 @@ openai	openai/gpt-5.4-mini	0	легче и дешевле
 anthropic	anthropic/claude-sonnet-4-6	1	прежний выбор установщика
 anthropic	anthropic/claude-opus-4-8	0	сильнее и дороже
 openrouter	openrouter/auto	1	роутер OpenRouter сам выбирает модель
+google	google/gemini-3.1-pro-preview	1	модель по умолчанию в документации OpenClaw (ключ AIza…)

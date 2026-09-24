@@ -28,6 +28,13 @@ else
   fi
 fi
 
+# Приватный рабочий каталог этого запуска (700; удаляется при выходе): временные
+# файлы с секретами, архив шаблонов, heartbeat — не по предсказуемым путям /tmp.
+if ! AISTACK_WORK="$(mktemp -d "${TMPDIR:-/tmp}/aistack-work.XXXXXX" 2>/dev/null)"; then
+  echo "❌ Не удалось создать рабочий каталог во временной папке ${TMPDIR:-/tmp}." >&2
+  exit 1
+fi
+
 # ── Логирование ─────────────────────────────────────────────────────────────
 say()     { echo "${CYA}▸${RST} $*"; }
 ok()      { echo "${GRN}✓${RST} $*"; }
@@ -87,17 +94,25 @@ mask_secrets() {
   printf '%s\n' "$s" | redact
 }
 
-# То же для потока (stdin → stdout): известные секреты заменяются буквально
-# (спецсимволы экранируются для sed), затем шаблоны redact.
+# То же для потока (stdin → stdout): известные секреты заменяются буквально,
+# затем шаблоны redact. Правила для sed пишутся во временный файл 600, а НЕ
+# передаются аргументами: argv любого процесса виден другим пользователям (ps).
 mask_stream() {
-  local v n=0 args=()
+  local v n=0 f
+  if ! f="$(mktemp "$AISTACK_WORK/mask.XXXXXX" 2>/dev/null)"; then
+    cat > /dev/null; echo "[вывод скрыт: не удалось подготовить маскировку секретов]"; return 0
+  fi
   for v in "${API_KEY:-}" ${TG_TOKENS[@]+"${TG_TOKENS[@]}"}; do
     [ -n "$v" ] || continue
-    args+=(-e "s/$(printf '%s' "$v" | sed 's/[][\/.^$*+?(){}|]/\\&/g')/[REDACTED]/g")
+    printf 's/%s/[REDACTED]/g\n' "$(printf '%s' "$v" | sed 's/[][\/.^$*+?(){}|]/\\&/g')" >> "$f"
     n=$((n + 1))
   done
-  if [ "$n" -eq 0 ]; then redact; else sed -E "${args[@]}" | redact; fi
+  if [ "$n" -eq 0 ]; then redact; else sed -E -f "$f" | redact; fi
+  rm -f "$f"
 }
+
+# Строка для JSON5 в двойных кавычках (\ и ")
+_json_str() { local s="${1//\\/\\\\}"; printf '%s' "${s//\"/\\\"}"; }
 
 # run_step "сообщение" cmd...  → тихо (в лог) + спиннер, фатально при ошибке
 run_step() {
@@ -134,7 +149,7 @@ retry() {
 
 # ── Watchdog (БРИФ-7) — прибивает зомби-процессы по тишине heartbeat ─────────
 WATCHDOG_PID=""
-WATCHDOG_HEARTBEAT_FILE="${AISTACK_HB:-/tmp/aistack-heartbeat-$$}"
+WATCHDOG_HEARTBEAT_FILE="${AISTACK_HB:-$AISTACK_WORK/heartbeat}"
 touch "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true
 get_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 heartbeat() { touch "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true; }
@@ -176,7 +191,7 @@ CURRENT_STAGE="инициализация"
 install_traps() {
   trap 'echo ""; err "Установка прервана пользователем (Ctrl+C). Запустите команду заново."; rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null; stop_watchdog; exit 130' INT TERM
   trap 'EXIT_CODE=$?; if [ "$EXIT_CODE" = "130" ]; then err "Установка прервана (Ctrl+C). Запустите заново."; else err "Ошибка на стейдже: ${CURRENT_STAGE}. Лог: $LOG"; fi; rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null; stop_watchdog; exit "$EXIT_CODE"' ERR
-  trap 'rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true; stop_watchdog' EXIT
+  trap 'rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true; stop_watchdog; rm -rf "$AISTACK_WORK" 2>/dev/null || true' EXIT
 }
 
 # ── parse_key (порт parseAccessKey из private-installer.html) ────────────────

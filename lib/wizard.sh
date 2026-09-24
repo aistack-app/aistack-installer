@@ -10,7 +10,7 @@ _infer_provider() {
   case "$1" in
     sk-ant-*) PROVIDER="anthropic";;
     sk-or-*)  PROVIDER="openrouter";;
-    AIza*)    PROVIDER="gemini";;
+    AIza*)    PROVIDER="google";;      # id провайдера в OpenClaw (ключ — GEMINI_API_KEY)
     sk-*)     PROVIDER="${AISTACK_PROVIDER:-openai}";;
     # неизвестный формат ключа (прокси и т.п.): по умолчанию OpenAI — клиенты
     # чаще всего на GPT; в интерактиве провайдер спрашивается явно
@@ -247,7 +247,7 @@ _ask_model() {
     case "$ans" in
       "") MODEL="$def";;
       *[!0-9]*) MODEL="$ans";;
-      *) MODEL="$(printf '%s\n' $list | sed -n "${ans}p")";;
+      *) if [ "$ans" -ge 1 ] && [ "$ans" -le "$n" ]; then MODEL="$(printf '%s\n' $list | sed -n "${ans}p")"; else MODEL=""; fi;;
     esac
     p="$(model_problem "$PROVIDER" "$MODEL")"
     [ -z "$p" ] && break
