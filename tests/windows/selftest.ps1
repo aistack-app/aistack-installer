@@ -44,7 +44,11 @@ Say ('  PowerShell: {0} ({1})' -f $PSVersionTable.PSVersion, $PSVersionTable.PSE
 Say ('  ОС: {0}' -f [Environment]::OSVersion.VersionString)
 try { Say ('  Кодовая страница консоли: {0}' -f [Console]::OutputEncoding.CodePage) } catch { }
 Say ('  Профиль пользователя: {0} (не-ASCII: {1}, пробел: {2})' -f $env:USERPROFILE, ($env:USERPROFILE -match '[^\x00-\x7F]'), ($env:USERPROFILE -match ' '))
+$script:Elevated = $false
 if ($IsWin) {
+  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $script:Elevated = (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  Say ('  Запуск с повышенными правами (администратор): ' + $script:Elevated)
   foreach ($p in (Get-ExecutionPolicy -List)) { Say ('  ExecutionPolicy {0}: {1}' -f $p.Scope, $p.ExecutionPolicy) }
   Say ('  Действующая ExecutionPolicy: {0}' -f (Get-ExecutionPolicy))
 }
@@ -138,7 +142,7 @@ $Toks = @('111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001', '222222222:FAKEtokenF
 $saved = @{}
 foreach ($n in @('USERPROFILE', 'TEMP', 'TMP', 'TMPDIR', 'PATH', 'HOME')) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
 
-function Invoke-Scenario([string]$Name, [hashtable]$Vars) {
+function Invoke-Scenario([string]$Name, [hashtable]$Vars, [string[]]$HostArgs = @()) {
   foreach ($f in @($calls, "$calls.files", "$calls.patches", "$calls.state.agents", "$calls.state.accounts")) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
   if (Test-Path -LiteralPath $prof) { Remove-Item -LiteralPath $prof -Recurse -Force }
   New-Item -ItemType Directory -Path $prof -Force | Out-Null
@@ -152,7 +156,8 @@ function Invoke-Scenario([string]$Name, [hashtable]$Vars) {
   foreach ($k in $all.Keys) { [Environment]::SetEnvironmentVariable($k, [string]$all[$k]) }
   $out = Join-Path $root "out-$Name.txt"; $err = Join-Path $root "err-$Name.txt"
   try {
-    $p = Start-Process -FilePath $hostExe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $Installer + '"'), 'AIS-START-COACH-TEST0001') `
+    if ($HostArgs.Count -eq 0) { $HostArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $Installer + '"'), 'AIS-START-COACH-TEST0001') }
+    $p = Start-Process -FilePath $hostExe -ArgumentList $HostArgs `
       -NoNewWindow -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     $code = $p.ExitCode
   } finally {
@@ -162,17 +167,54 @@ function Invoke-Scenario([string]$Name, [hashtable]$Vars) {
   $text = ''
   foreach ($f in @($out, $err)) { if (Test-Path -LiteralPath $f) { $text += [IO.File]::ReadAllText($f, $Utf8) } }
   $callText = ''; if (Test-Path -LiteralPath $calls) { $callText = [IO.File]::ReadAllText($calls, $Utf8) }
-  return @{ Code = $code; Text = $text; Calls = $callText; Marks = ([regex]::Matches($text, 'AIStack установлен')).Count }
+  # дерево профиля — СРАЗУ после сценария (следующий сценарий профиль очистит);
+  # сохраняется в tree-<сценарий>.txt рядом с out-/err-файлами (видно с -Keep)
+  $tree = @(Get-TreeList)
+  [IO.File]::WriteAllLines((Join-Path $root "tree-$Name.txt"), [string[]]$tree, (New-Object System.Text.UTF8Encoding $true))
+  return @{ Code = $code; Text = $text; Calls = $callText; Marks = ([regex]::Matches($text, 'AIStack установлен')).Count; Tree = $tree }
 }
-function Get-Tree { if (-not (Test-Path -LiteralPath $prof)) { return '' }; return ((Get-ChildItem -LiteralPath $prof -Recurse -Force | ForEach-Object { $_.FullName.Substring($prof.Length) }) -join "`n") }
+function Get-TreeList {
+  if (-not (Test-Path -LiteralPath $prof)) { return @() }
+  return @(Get-ChildItem -LiteralPath $prof -Recurse -Force | ForEach-Object { $_.FullName.Substring($prof.Length) } | Sort-Object)
+}
+# Test-Parts <название> <[ordered] часть→bool> <подробности при провале>: ok только
+# если ВСЕ части истинны; иначе FAIL с каждой частью отдельно
+function Test-Parts([string]$Title, $Parts, [string[]]$Details = @()) {
+  $bad = @(); foreach ($k in $Parts.Keys) { if (-not $Parts[$k]) { $bad += $k } }
+  if ($bad.Count -eq 0) { Pass $Title; return }
+  Fail ($Title + ' — не выполнено: ' + ($bad -join '; '))
+  foreach ($k in $Parts.Keys) { Say ('         [{0}] {1}' -f $(if ($Parts[$k]) { 'да ' } else { 'НЕТ' }), $k) }
+  foreach ($d in $Details) { Say ('         ' + $d) }
+}
 
 Say ('# Сценарии (install.ps1 через ' + $hostExe + ')')
 # ВНИМАНИЕ: переменные PowerShell нечувствительны к регистру — не называть $toks
 $TokLine = $Toks -join ' '
 
+# Контроль: тот же хост и то же окружение (USERPROFILE = песочница), но без
+# установщика. Показывает, что пишет в профиль САМ PowerShell (например, если
+# известные папки вида %USERPROFILE%\AppData\Local раскрываются в песочницу).
+$ctl = Invoke-Scenario 'host-control' @{} @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'exit 0')
+Say ('  инфо - контроль (powershell.exe -Command "exit 0", без установщика): код {0}, объектов в профиле: {1}' -f $ctl.Code, $ctl.Tree.Count)
+foreach ($t in ($ctl.Tree | Select-Object -First 15)) { Say ('         контроль: ' + $t) }
+
 $r = Invoke-Scenario 'dry' @{ AISTACK_DRY_RUN = '1'; AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine }
-if ($r.Code -eq 0 -and $r.Marks -eq 0 -and $r.Text -match 'ничего не установлено' -and (Get-Tree) -eq '' -and -not $r.Calls) { Pass 'dry-run: exit 0, без «AIStack установлен», профиль пуст, ни одного вызова openclaw' }
-else { Fail ("dry-run: exit={0}, маркер×{1}, вызовы: {2}" -f $r.Code, $r.Marks, $r.Calls.Trim()) }
+$phrase = 'ничего не установлено'
+$tail = @(($r.Text -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 3)
+$onlyDry = @($r.Tree | Where-Object { $ctl.Tree -notcontains $_ })
+$details = @()
+$details += ('код выхода: {0}; «AIStack установлен»×{1}; вызовов openclaw: {2} байт' -f $r.Code, $r.Marks, $r.Calls.Length)
+$details += ('фраза «{0}» в выводе: {1}; последние строки вывода: {2}' -f $phrase, $r.Text.Contains($phrase), (($tail | ForEach-Object { '«' + $_.Trim() + '»' }) -join ' | '))
+$details += ('объектов в профиле после dry-run: {0} (из них нет в контроле: {1}); список — tree-dry.txt' -f $r.Tree.Count, $onlyDry.Count)
+foreach ($t in ($r.Tree | Select-Object -First 15)) { $details += ('профиль после dry-run: ' + $t + $(if ($ctl.Tree -contains $t) { '   [есть и в контроле]' } else { '' })) }
+$parts = [ordered]@{
+  'код выхода 0'                           = ($r.Code -eq 0)
+  'нет «AIStack установлен»'              = ($r.Marks -eq 0)
+  ('в выводе есть «' + $phrase + '»')      = $r.Text.Contains($phrase)
+  'профиль после dry-run пуст'             = ($r.Tree.Count -eq 0)
+  'ни одного вызова openclaw'              = (-not $r.Calls)
+}
+Test-Parts 'dry-run: exit 0, без «AIStack установлен», профиль пуст, ни одного вызова openclaw' $parts $details
 
 $r = Invoke-Scenario 'nokeys' @{}
 if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'AISTACK_API_KEY' -and -not $r.Calls) { Pass 'без ключей: отказ до любых вызовов openclaw' }
@@ -210,6 +252,7 @@ $r = Invoke-Scenario 'gwdown' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $To
 if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'Gateway') { Pass 'gateway не отвечает → «НЕ завершена», код ≠ 0, маркера нет' } else { Fail ("gateway: exit={0}, маркер×{1}" -f $r.Code, $r.Marks) }
 
 # ── 4) Итог ─────────────────────────────────────────────────────────────────
+if ($script:Elevated) { Fail 'запуск с повышенными правами: приёмка требует обычного окна PowerShell (не «от имени администратора»)' }
 Say ''
 if ($script:Fails -eq 0) { Say 'SELFTEST: ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ' } else { Say ("SELFTEST: ПРОВАЛЕНО ПРОВЕРОК: {0}" -f $script:Fails) }
 Say 'Это проверка установщика на заглушках: модель, авторизация, Telegram и реальный OpenClaw НЕ проверялись.'
