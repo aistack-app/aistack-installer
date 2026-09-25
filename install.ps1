@@ -699,12 +699,20 @@ function Invoke-AisMain {
   }
 
   Write-Host ''
-  Write-Host '  🚀  AIStack установлен' -ForegroundColor Green
-  Write-Host ("  ✓ Сборка:         {0} ({1}) — {2}" -f $K.PresetId, $K.Tariff, $K.Agents)
-  Write-Host ("  ✓ Модель:         " + $(if ($script:Model) { $script:Model } else { 'не выбрана (openclaw models set)' }))
-  Write-Host ("  ✓ Память команды: {0}  (можно открыть в Obsidian)" -f $script:VaultPath)
-  Write-Host '  📊 Dashboard:      http://localhost:18789'
-  Write-Host '  🩺 Если что-то не так: openclaw status  (диагноз без изменений)'
+  Write-Host '  🚀  AIStack установлен: настройки подтверждены' -ForegroundColor Green
+  Write-Host ''
+  Write-Host '  Проверено установщиком:'
+  Write-Host ("  ✓ Боты Telegram:   {0}/{0} в конфиге OpenClaw, каждый привязан к своей роли — {1}" -f $K.AgentCount, $K.Agents)
+  Write-Host ("  ✓ Конфиг OpenClaw: валиден (сборка {0}, {1})" -f $K.PresetId, $K.Tariff)
+  Write-Host '  ✓ Gateway:         ответил на RPC-пробу (dashboard http://localhost:18789)'
+  Write-Host ("  ✓ Память команды:  {0}  (можно открыть в Obsidian)" -f $script:VaultPath)
+  Write-Host ''
+  Write-Host '  НЕ проверено установщиком (нужен живой запуск):'
+  Write-Host ("  ? ответ модели " + $(if ($script:Model) { $script:Model } else { '(не выбрана: openclaw.cmd models set)' }) + ' с вашим ключом/подпиской')
+  Write-Host ("  ? ответы ботов — напишите каждому из {0} ботов «привет»; нет ответа → openclaw.cmd models status" -f $K.AgentCount)
+  # openclaw.cmd, а не openclaw: в новом окне PowerShell с политикой по умолчанию
+  # «openclaw» может попасть на npm-обёртку openclaw.ps1 и упасть на ExecutionPolicy
+  Write-Host '  🩺 Диагностика без изменений: openclaw.cmd status'
   Write-Host ("  Лог установки: " + $script:Log)
 }
 

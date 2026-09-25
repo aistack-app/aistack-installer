@@ -220,8 +220,26 @@ PRESEED="" FOREIGN=1  psv foreign;                                 psfail "аг�
 PRESEED="coordinator designer copywriter" FOREIGN="" psv preexisting
 [ "$RC" -eq 0 ] && [ "$MARKS" = 1 ] && grep -q '^openclaw config get bindings --json$' "$SB_CALLS" \
   && pass "PS: агенты уже существовали → подтверждены чтением конфига → exit 0, успех" || fail "PS: повторная установка: exit=$RC, маркер×$MARKS"
+FIN="$SANDBOX/ps-final-block.txt"; sed -n '/AIStack установлен/,$p' "$OUT" > "$FIN"
+if grep -q 'НЕ проверено установщиком' "$FIN" && grep -q 'каждому из 3 ботов' "$FIN" && ! grep -q '✓ Модель' "$FIN" \
+   && grep -q 'openclaw.cmd status' "$FIN"; then
+  pass "PS: финал разделяет «проверено»/«НЕ проверено»; совет — openclaw.cmd (не .ps1-обёртка)"
+else fail "PS: финал: $(grep -E '✓ Модель|НЕ проверено|openclaw(\.cmd)? status' "$FIN" | head -3 | tr '\n' '|')"; fi
 PRESEED="" FOREIGN="" psv dry AISTACK_DRY_RUN=1
 [ "$RC" -eq 0 ] && [ "$MARKS" = 0 ] && grep -q 'ничего не установлено' "$OUT" \
   && pass "PS: dry-run → exit 0 без «AIStack установлен»" || fail "PS: dry-run: exit=$RC, маркер×$MARKS"
+
+
+# ── I) самопроверка для нативной Windows (tests/windows/selftest.ps1) ────────
+# На Windows её запускают через powershell.exe 5.1; здесь (pwsh на Linux/macOS)
+# проверяется только, что сам сценарий исправен и зелёный на текущем коде.
+rm -rf "$SANDBOX"; new_sandbox
+TMPDIR="$SB_TMP" pwsh -NoLogo -NoProfile -NonInteractive -File "$REPO_DIR/tests/windows/selftest.ps1" > "$SB_TMP/selftest.out" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'SELFTEST: ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ' "$SB_TMP/selftest.out" && ! grep -q 'FAIL' "$SB_TMP/selftest.out"; then
+  pass "selftest.ps1 (сценарий для нативной Windows) исправен: $(grep -c '^  ok' "$SB_TMP/selftest.out") проверок зелёные"
+else fail "selftest.ps1: rc=$rc $(grep -m2 -E 'FAIL|Exception' "$SB_TMP/selftest.out" | tr '\n' ' ')"; fi
+[ "$(head -c 3 "$REPO_DIR/tests/windows/selftest.ps1" | od -An -tx1 | tr -d ' \n')" = "efbbbf" ] \
+  && pass "selftest.ps1 в UTF-8 с BOM" || fail "selftest.ps1 без BOM"
 
 finish
