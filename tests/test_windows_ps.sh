@@ -191,4 +191,37 @@ q="$(grep '^openclaw ' "$SB_CALLS" | grep -F '"')"
 top="$(ls -A "$SB_HOME" | sort | tr '\n' ' ')"
 [ "$top" = ".openclaw AIStack-Vault " ] && pass "в профиле только ожидаемое: $top" || fail "в профиле: $top"
 
+
+# ── H) итог install.ps1: успех только после подтверждения ────────────────────
+# те же сценарии, что test_final_verdict для bash (заглушка openclaw с состоянием)
+psv() {  # psv <метка> [VAR=val…] → RC, MARKS, OUT
+  local label="$1"; shift
+  rm -rf "$SANDBOX"; new_sandbox; add_e2e_stubs
+  [ -n "${PRESEED:-}" ] && for a in $PRESEED; do echo "$a $SB_HOME/.openclaw/workspace-$a" >> "$SB_CALLS.state.agents"; done
+  [ -n "${FOREIGN:-}" ] && echo "coordinator /somewhere/else/workspace-old" >> "$SB_CALLS.state.agents"
+  OUT="$SANDBOX/ps-$label.out"
+  env -u AISTACK_HB HOME="$SANDBOX/pwsh-home" USERPROFILE="$SB_HOME" PATH="$SB_BIN:$PATH" TMPDIR="$SB_TMP" \
+    AISTACK_TEST_ALLOW_NONWINDOWS=1 AISTACK_NONINTERACTIVE=1 AISTACK_TEMPLATES_DIR="$REPO_DIR/templates" \
+    AISTACK_API_KEY="sk-proj-FAKEe2eFAKEe2eFAKEe2eFAKE01" \
+    AISTACK_TG_TOKENS="111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001 222222222:FAKEtokenFAKEtokenFAKEtokenFAKE0002 333333333:FAKEtokenFAKEtokenFAKEtokenFAKE0003" \
+    AISTACK_LOG="$SB_TMP/ps-v.log" E2E_CALLS="$SB_CALLS" E2E_REPO="$REPO_DIR" "$@" \
+    pwsh -NoLogo -NoProfile -NonInteractive -File "$PS1" AIS-START-COACH-TEST0001 > "$OUT" 2>&1 </dev/null
+  RC=$?; MARKS="$(grep -c 'AIStack установлен' "$OUT")"
+}
+psfail() {
+  if [ "$RC" -ne 0 ] && [ "$MARKS" = 0 ] && grep -q 'НЕ завершена' "$OUT" && grep -q "$2" "$OUT"; then
+    pass "PS: $1 → exit $RC, маркера успеха нет, причина названа"
+  else fail "PS: $1: exit=$RC, маркер×$MARKS, $(grep -m1 -E 'НЕ завершена|AIStack установлен|Exception' "$OUT")"; fi
+}
+PRESEED="" FOREIGN="" psv agents_fail E2E_FAIL_AGENTS_ADD=1;       psfail "agents add падает для всех ролей" 'Агент coordinator'
+PRESEED="" FOREIGN="" psv channel_fail E2E_FAIL_CHANNEL=designer;  psfail "channels add отклонён для designer" 'Telegram-аккаунт designer'
+PRESEED="" FOREIGN="" psv gateway_down E2E_GATEWAY_DOWN=1;         psfail "gateway не отвечает на RPC-пробу" 'Gateway'
+PRESEED="" FOREIGN=1  psv foreign;                                 psfail "агент coordinator с чужим рабочим каталогом" 'Агент coordinator'
+PRESEED="coordinator designer copywriter" FOREIGN="" psv preexisting
+[ "$RC" -eq 0 ] && [ "$MARKS" = 1 ] && grep -q '^openclaw config get bindings --json$' "$SB_CALLS" \
+  && pass "PS: агенты уже существовали → подтверждены чтением конфига → exit 0, успех" || fail "PS: повторная установка: exit=$RC, маркер×$MARKS"
+PRESEED="" FOREIGN="" psv dry AISTACK_DRY_RUN=1
+[ "$RC" -eq 0 ] && [ "$MARKS" = 0 ] && grep -q 'ничего не установлено' "$OUT" \
+  && pass "PS: dry-run → exit 0 без «AIStack установлен»" || fail "PS: dry-run: exit=$RC, маркер×$MARKS"
+
 finish

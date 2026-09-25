@@ -38,6 +38,7 @@ $script:DryRun       = [bool]$DryRun -or ($env:AISTACK_DRY_RUN -eq '1')
 $script:Utf8         = New-Object System.Text.UTF8Encoding $false
 $script:ApiKey       = ''
 $script:Work         = ''
+$script:Problems     = @()
 $script:TgTokens     = @()
 
 # ── Вывод ────────────────────────────────────────────────────────────────────
@@ -536,13 +537,15 @@ function Set-AisProvider {
 
 function Register-AisBots($K) {
   $wsBase = Join-Path (Get-AisHome) '.openclaw'
-  $agents = @($K.Agents -split ' '); $ok = 0
+  $agents = @($K.Agents -split ' ')
   for ($i = 0; $i -lt $agents.Count; $i++) {
     $a = $agents[$i]
     $tf = Get-AisTokenFile $a $script:TgTokens[$i]
     Invoke-AisStep "Telegram-аккаунт: $a" 'openclaw' @('channels', 'add', '--channel', 'telegram', '--account', $a, '--token-file', $tf) -Soft | Out-Null
     $code = Invoke-AisNative 'openclaw' @('agents', 'add', $a, '--non-interactive', '--workspace', (Join-Path $wsBase "workspace-$a"), '--bind', "telegram:$a")
-    if ($code -eq 0) { $ok++; Write-AisOk "Агент: $a" } else { Write-AisWarn "Агент $a`: agents add не отработал (возможно, уже существует) — см. лог $($script:Log)" }
+    # Код agents add — только сведения; есть ли агент и привязка, решает
+    # Test-AisTeam (чтение конфига), а не догадка «наверное, уже существует»
+    if ($code -eq 0) { Write-AisOk "Агент: $a" } else { Write-AisWarn "Агент $a`: agents add не отработал (возможно, уже существует) — проверю чтением конфига" }
     if (-not $script:DryRun -and $i -lt $agents.Count - 1) { Start-Sleep -Seconds 2 }
   }
   if ($script:OwnerTgId) {
@@ -551,13 +554,71 @@ function Register-AisBots($K) {
     $acc = @(); foreach ($a in $agents) { $acc += ($a + ': { dmPolicy: "allowlist", allowFrom: ["' + $script:OwnerTgId + '"] }') }
     Invoke-AisPatch ('{ channels: { telegram: { accounts: { ' + ($acc -join ', ') + ' } } }, commands: { ownerAllowFrom: ["telegram:' + $script:OwnerTgId + '"] } }') "Доступ только владельцу: $($script:OwnerTgId)"
   }
-  Write-AisOk "Зарегистрировано агентов: $ok/$($agents.Count)"
   if (-not $script:DryRun) {
     if ((Invoke-AisNative 'openclaw' @('config', 'validate')) -ne 0) {
       Write-AisErr "Конфиг не прошёл валидацию после регистрации агентов. Лог: $($script:Log)"; exit 1
     }
     Write-AisOk 'Конфиг валиден'
   }
+  Test-AisTeam $K
+}
+
+# ── Итог: успех — только если всё подтверждено ─────────────────────────────
+function Add-AisProblem([string]$m) { $script:Problems += $m; Write-AisWarn $m }
+function Get-AisProp($o, [string]$name) {
+  if ($null -eq $o) { return $null }
+  $p = $o.PSObject.Properties[$name]
+  if ($p) { return $p.Value }
+  return $null
+}
+# openclaw config get <путь> --json → объект (или $null). Вывод не пишется в лог.
+function Get-AisConfigJson([string]$Path) {
+  if (-not (Get-Command openclaw -ErrorAction SilentlyContinue)) { return $null }
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $raw = ''
+  try { $raw = (& openclaw config get $Path --json 2>$null | Out-String) } catch { $raw = '' }
+  finally { $ErrorActionPreference = $eap }
+  if (-not $raw -or -not $raw.Trim()) { return $null }
+  try { return (ConvertFrom-Json $raw) } catch { return $null }
+}
+function ConvertTo-AisList($x) {
+  # PS 5.1 отдаёт JSON-массив из ConvertFrom-Json одним объектом — разворачиваем
+  $out = @(); if ($null -ne $x) { foreach ($i in $x) { $out += , $i } }; return , $out
+}
+function Test-AisSamePath([string]$Got, [string]$Want, [string]$Agent) {
+  if (-not $Got) { return $false }
+  $g = $Got.TrimEnd('\', '/'); $w = $Want.TrimEnd('\', '/')
+  if ($g -eq ('~/.openclaw/workspace-' + $Agent) -or $g -eq ('~\.openclaw\workspace-' + $Agent)) { return $true }
+  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { return ($g.Replace('/', '\') -ieq $w.Replace('/', '\')) }
+  return ($g -eq $w)
+}
+# Test-AisTeam — read-back: для каждой роли в конфиге OpenClaw есть Telegram-
+# аккаунт с токеном, агент с НАШИМ рабочим каталогом и привязка telegram:<роль>
+function Test-AisTeam($K) {
+  if ($script:DryRun) { return }
+  $wsBase = Join-Path (Get-AisHome) '.openclaw'
+  $al = ConvertTo-AisList (Get-AisConfigJson 'agents.list')
+  $bl = ConvertTo-AisList (Get-AisConfigJson 'bindings')
+  $cl = Get-AisConfigJson 'channels.telegram.accounts'
+  $before = $script:Problems.Count
+  foreach ($a in @($K.Agents -split ' ')) {
+    $acc = Get-AisProp $cl $a
+    if (-not ((Get-AisProp $acc 'tokenFile') -or (Get-AisProp $acc 'botToken'))) {
+      Add-AisProblem "Telegram-аккаунт $a не найден в конфиге OpenClaw (бот не подключён)"
+    }
+    $want = Join-Path $wsBase "workspace-$a"
+    $ag = $null; foreach ($x in $al) { if ((Get-AisProp $x 'id') -eq $a) { $ag = $x; break } }
+    if (-not $ag -or -not (Test-AisSamePath ([string](Get-AisProp $ag 'workspace')) $want $a)) {
+      Add-AisProblem "Агент $a не найден в конфиге или работает из другого каталога (нужен $want)"
+    }
+    $bound = $false
+    foreach ($b in $bl) {
+      $m = Get-AisProp $b 'match'
+      if ((Get-AisProp $b 'agentId') -eq $a -and (Get-AisProp $m 'channel') -eq 'telegram' -and (Get-AisProp $m 'accountId') -eq $a) { $bound = $true; break }
+    }
+    if (-not $bound) { Add-AisProblem "Агент $a не привязан к боту telegram:$a" }
+  }
+  if ($script:Problems.Count -eq $before) { Write-AisOk ("Команда подтверждена чтением конфига: " + $K.Agents) }
 }
 
 function Start-AisGateway {
@@ -566,13 +627,12 @@ function Start-AisGateway {
   Invoke-AisStep 'Ставлю gateway как сервис (Scheduled Task, автозапуск)' 'openclaw' @('gateway', 'install') -Soft | Out-Null
   Invoke-AisStep 'Запускаю gateway' 'openclaw' @('gateway', 'start') -Soft | Out-Null
   if ($script:DryRun) { Write-AisOk 'Gateway OK (dry-run)'; return }
+  # Подтверждение — код `gateway status --require-rpc` (docs пина), а не текст
   for ($t = 0; $t -lt 10; $t++) {
-    $s = ''
-    try { $s = (& openclaw gateway status 2>$null | Out-String) } catch { }
-    if ($s -match '(?i)running|reachable') { Write-AisOk 'Gateway работает'; return }
+    if ((Invoke-AisNative 'openclaw' @('gateway', 'status', '--require-rpc')) -eq 0) { Write-AisOk 'Gateway работает (RPC-проба прошла)'; return }
     Start-Sleep -Seconds 3
   }
-  Write-AisWarn 'Gateway не подтвердил статус за 30с. Проверьте: openclaw gateway status --json'
+  Add-AisProblem 'Gateway не ответил на RPC-пробу за 30 с (проверка: openclaw gateway status --require-rpc)'
 }
 
 # ── Главный сценарий ────────────────────────────────────────────────────────
@@ -622,6 +682,21 @@ function Invoke-AisMain {
 
   Write-AisStage 'ШАГ 6/6 · запуск'
   Start-AisGateway
+
+  # Итог — только по фактам: dry-run ничего не ставит; любая проблема → код 1
+  if ($script:DryRun) {
+    Write-Host ''
+    Write-Host ("  Dry-run завершён: ничего не установлено и не запущено. Команды — в логе: " + $script:Log)
+    return
+  }
+  if ($script:Problems.Count -gt 0) {
+    Write-Host ''
+    Write-AisErr 'Установка НЕ завершена — команда не готова к работе'
+    foreach ($p in $script:Problems) { Write-Host ('  - ' + $p) -ForegroundColor Red }
+    Write-Host ('  Лог: ' + $script:Log)
+    Write-Host '  Исправьте причину и запустите установку ещё раз (готовые шаги повторятся безопасно).'
+    exit 1
+  }
 
   Write-Host ''
   Write-Host '  🚀  AIStack установлен' -ForegroundColor Green

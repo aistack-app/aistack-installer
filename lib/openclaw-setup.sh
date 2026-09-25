@@ -133,7 +133,7 @@ openclaw_set_provider() {
 #   3) доступ владельцу (allowlist) — иначе бот встречает pairing-кодом
 register_bots() {
   CURRENT_STAGE="Stage 7: register agents"
-  local i=0 a tok registered=0
+  local i=0 a tok
   for a in $AGENTS; do
     tok="${TG_TOKENS[$i]:-}"
     if [ -n "$tok" ]; then
@@ -143,12 +143,14 @@ register_bots() {
       run_soft "Telegram-аккаунт: $a" \
         openclaw channels add --channel telegram --account "$a" --token-file "$(tg_token_file "$a" "$tok")"
     fi
+    # Код agents add — только сведения: «уже существует» и настоящая ошибка
+    # выглядят одинаково. Что агент есть и привязан, решает verify_team
+    # (чтение конфига) — а не догадка по коду ошибки.
     if ( run openclaw agents add "$a" --non-interactive \
            --workspace "$WORKSPACE_BASE/workspace-$a" --bind "telegram:$a" ); then
-      registered=$((registered + 1))
       ok "Агент: $a"
     else
-      warn "Агент $a: agents add не отработал (возможно, уже существует) — см. лог $LOG"
+      warn "Агент $a: agents add не отработал (возможно, уже существует) — проверю чтением конфига"
     fi
     # Доступ только владельцу (если ID собран в wizard)
     if [ -n "${OWNER_TG_ID:-}" ]; then
@@ -168,8 +170,6 @@ register_bots() {
       openclaw config set commands.ownerAllowFrom "[\"telegram:$OWNER_TG_ID\"]" --strict-json
   fi
 
-  ok "Зарегистрировано агентов: $registered/$AGENT_COUNT"
-
   setup_smallbiz_runtime
 
   # Конфиг после всех правок ОБЯЗАН быть валидным — иначе gateway не стартует
@@ -182,6 +182,60 @@ register_bots() {
       exit 1
     fi
   fi
+
+  verify_team
+}
+
+# ── Итог установки: успех — только если всё подтверждено ────────────────────
+# Любая проблема копится здесь; при PROBLEM_COUNT > 0 install.sh не печатает
+# «AIStack установлен» и завершается с кодом 1.
+PROBLEM_COUNT=0
+PROBLEM_TEXT=""
+add_problem() {
+  PROBLEM_COUNT=$((PROBLEM_COUNT + 1))
+  PROBLEM_TEXT="${PROBLEM_TEXT}  - $*
+"
+  warn "$*"
+}
+
+# JSON в одну строку без пробелов МЕЖДУ токенами (внутри строк — сохраняются:
+# путь к HOME может содержать пробел); _split_before <regex> — перевод строки
+# перед каждым совпадением (awk/sed без GNU-расширений: работает и на macOS)
+_json_flat()     { tr -d '\r\n' | sed -E 's/(:|,|[{]|\[)[[:space:]]+/\1/g'; }
+_split_before()  { awk -v k="$1" '{ gsub(k, "\n&"); print }'; }
+
+# Проверки по схеме конфига OpenClaw (docs пина): agents.list[].id/workspace,
+# bindings[].agentId + match{channel,accountId}, channels.telegram.accounts.<id>
+_agent_ok() {    # <agents.list json> <id> <workspace>
+  printf '%s' "$1" | _split_before '"id":' | grep -F "\"id\":\"$2\"" \
+    | grep -qF -e "\"workspace\":\"$3\"" -e "\"workspace\":\"~/.openclaw/workspace-$2\""
+}
+_binding_ok() {  # <bindings json> <id>
+  printf '%s' "$1" | _split_before '"agentId":' | grep -F "\"agentId\":\"$2\"" \
+    | grep -F '"channel":"telegram"' | grep -qF "\"accountId\":\"$2\""
+}
+_account_ok() {  # <channels.telegram.accounts json> <id>
+  printf '%s' "$1" | _split_before '"[A-Za-z0-9_-]+":[{]' | grep -F "\"$2\":{" \
+    | grep -qE '"(tokenFile|botToken)":'
+}
+
+# verify_team — read-back: для каждой роли в конфиге OpenClaw есть Telegram-
+# аккаунт с токеном, агент с НАШИМ рабочим каталогом и привязка telegram:<роль>
+verify_team() {
+  CURRENT_STAGE="Stage 7c: проверка команды"
+  [ "${AISTACK_DRY_RUN:-0}" = "1" ] && return 0
+  local al bl cl a
+  al="$(openclaw config get agents.list --json 2>/dev/null | _json_flat || true)"
+  bl="$(openclaw config get bindings --json 2>/dev/null | _json_flat || true)"
+  cl="$(openclaw config get channels.telegram.accounts --json 2>/dev/null | _json_flat || true)"
+  for a in $AGENTS; do
+    _account_ok "$cl" "$a" || add_problem "Telegram-аккаунт $a не найден в конфиге OpenClaw (бот не подключён)"
+    _agent_ok "$al" "$a" "$WORKSPACE_BASE/workspace-$a" \
+      || add_problem "Агент $a не найден в конфиге или работает из другого каталога (нужен $WORKSPACE_BASE/workspace-$a)"
+    _binding_ok "$bl" "$a" || add_problem "Агент $a не привязан к боту telegram:$a"
+  done
+  [ "$PROBLEM_COUNT" -eq 0 ] && ok "Команда подтверждена чтением конфига: $AGENTS"
+  return 0
 }
 
 # tg_token_file <аккаунт> <токен> → путь к файлу токена (600, каталог 700).
@@ -259,15 +313,15 @@ openclaw_start() {
   # провайдеров + плагинов) на медленном VPS легко занимает >15с —
   # поэтому окно 30с (10×3с), иначе ложный warn после рабочей установки.
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Gateway OK (dry-run)"; return 0; fi
+  # Подтверждение — код `gateway status --require-rpc` (docs пина: ненулевой,
+  # если read-RPC-проба не прошла), а не поиск слова «running» в тексте.
   local try=0
   while [ "$try" -lt 10 ]; do
-    if openclaw gateway status 2>/dev/null | grep -qiE "running|reachable"; then
-      ok "Gateway работает"
+    if run openclaw gateway status --require-rpc; then
+      ok "Gateway работает (RPC-проба прошла)"
       return 0
     fi
     try=$((try + 1)); sleep 3; heartbeat
   done
-  # Не дождались за 30с — но gateway уже запущен командой выше; на машинах
-  # без systemd (контейнеры) статус и не подтвердится — это норма.
-  warn "Gateway не подтвердил статус за 30с. Если вы на обычном сервере — проверьте: openclaw gateway status (в контейнере без systemd это ожидаемо)."
+  add_problem "Gateway не ответил на RPC-пробу за 30 с (проверка: openclaw gateway status --require-rpc)"
 }

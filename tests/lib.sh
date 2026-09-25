@@ -71,9 +71,31 @@ argval() { k="$1"; shift; prev=""; for a in "$@"; do [ "$prev" = "$k" ] && { ech
 fmode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
 case "$n" in
   openclaw)
+    # Заглушка «с состоянием»: помнит добавленные аккаунты/агентов/привязки
+    # (файлы $E2E_CALLS.state.*) и отвечает на `config get … --json`.
+    # Отказы для тестов: E2E_FAIL_AGENTS_ADD=1, E2E_FAIL_CHANNEL=<роль>,
+    # E2E_GATEWAY_DOWN=1. Предустановка: заранее записанные state-файлы.
+    st="$E2E_CALLS.state"
     case "$1 $2" in
       "--version "*) echo "OpenClaw 2026.6.5";;
-      "gateway status") echo "Gateway: running";;
+      "gateway status")
+        if [ -n "${E2E_GATEWAY_DOWN:-}" ]; then echo "Gateway: stopped (probe failed)"; exit 1; fi
+        echo "Gateway: running";;
+      "config get")
+        case "$3" in
+          agents.list)
+            printf '['; sep=""; [ -f "$st.agents" ] && while read -r a ws; do
+              printf '%s{"id": "%s", "model": {"primary": "x"}, "workspace": "%s"}' "$sep" "$a" "$ws"; sep=", "; done < "$st.agents"
+            printf ']\n';;
+          bindings)
+            printf '['; sep=""; [ -f "$st.agents" ] && while read -r a ws; do
+              printf '%s{"agentId": "%s", "match": {"channel": "telegram", "accountId": "%s"}}' "$sep" "$a" "$a"; sep=", "; done < "$st.agents"
+            printf ']\n';;
+          channels.telegram.accounts)
+            printf '{'; sep=""; [ -f "$st.accounts" ] && while read -r a f; do
+              printf '%s"%s": {"dmPolicy": "pairing", "tokenFile": "%s"}' "$sep" "$a" "$f"; sep=", "; done < "$st.accounts"
+            printf '}\n';;
+        esac;;
       "config patch")
         f="$(argval --file "$@")"
         if [ -f "$f" ]; then
@@ -84,7 +106,14 @@ case "$n" in
         f="$(argval --token-file "$@")"; a="$(argval --account "$@")"
         if [ -n "$f" ] && [ -f "$f" ]; then
           echo "TOKEN $a mode=$(fmode "$f") dir=$(fmode "$(dirname "$f")") sum=$(cksum < "$f" | cut -d' ' -f1)" >> "$E2E_CALLS.files"
-        fi;;
+        fi
+        if [ "$a" = "${E2E_FAIL_CHANNEL:-}" ]; then echo "Error: telegram rejected token"; exit 1; fi
+        grep -q "^$a " "$st.accounts" 2>/dev/null || echo "$a $f" >> "$st.accounts";;
+      "agents add")
+        a="$3"; ws="$(argval --workspace "$@")"
+        if grep -q "^$a " "$st.agents" 2>/dev/null; then echo "Error: agent $a already exists"; exit 9; fi
+        if [ -n "${E2E_FAIL_AGENTS_ADD:-}" ]; then echo "Error: agents add failed"; exit 9; fi
+        echo "$a $ws" >> "$st.agents";;
     esac; exit 0;;
   python3*)
     [ "$1" = "-m" ] && [ "$2" = "venv" ] && { mkdir -p "$3/bin"; for b in python pip hermes; do cp "$0" "$3/bin/$b"; done; }

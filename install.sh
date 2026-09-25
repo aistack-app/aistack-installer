@@ -112,8 +112,29 @@ main() {
   # убьёт процесс, пока клиент думает над «Открыть dashboard?» (ложный
   # «процесс завис» после успешной установки — поймано на VPS-тесте).
   stop_watchdog
+  # Итог — только по фактам: dry-run ничего не ставит; любая проблема
+  # (канал, агент, привязка, gateway) → «не завершена» и код 1
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then print_dry_run_marker; return 0; fi
+  if [ "$PROBLEM_COUNT" -gt 0 ]; then print_incomplete_marker; exit 1; fi
   print_final_marker
   open_dashboard_prompt
+}
+
+print_dry_run_marker() {
+  CURRENT_STAGE="финал (dry-run)"
+  echo ""
+  echo "  Dry-run завершён: ничего не установлено и не запущено. Команды — в логе: $LOG"
+}
+
+print_incomplete_marker() {
+  CURRENT_STAGE="финал: установка не завершена"
+  echo "" >&2
+  echo "${RED}════════════════════════════════════════════════════════════${RST}" >&2
+  echo "  ${RED}❌  Установка НЕ завершена — команда не готова к работе${RST}" >&2
+  echo "${RED}════════════════════════════════════════════════════════════${RST}" >&2
+  printf '%s' "$PROBLEM_TEXT" >&2
+  echo "  Лог: $LOG" >&2
+  echo "  Исправьте причину и запустите установку ещё раз (готовые шаги повторятся безопасно)." >&2
 }
 
 print_final_marker() {
