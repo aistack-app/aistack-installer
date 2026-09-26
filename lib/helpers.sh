@@ -11,8 +11,29 @@ else
   GRN=""; YEL=""; CYA=""; RED=""; MAG=""; DIM=""; RST=""
 fi
 
-LOG="${AISTACK_LOG:-/tmp/aistack-install.log}"
-: > "$LOG" 2>/dev/null || true
+# Лог только для владельца (600): в нём вывод установки. По умолчанию — уникальный
+# файл через mktemp (не фиксированный путь в /tmp → нельзя подложить симлинк).
+if [ -n "${AISTACK_LOG:-}" ]; then
+  LOG="$AISTACK_LOG"
+  if [ -L "$LOG" ]; then
+    echo "❌ AISTACK_LOG=$LOG — символическая ссылка. Укажите обычный файл." >&2
+    exit 1
+  fi
+  ( umask 077; : > "$LOG" ) 2>/dev/null && chmod 600 "$LOG" 2>/dev/null || true
+else
+  _log_dir="${TMPDIR:-/tmp}"
+  if ! LOG="$(umask 077; mktemp "${_log_dir%/}/aistack-install.XXXXXX" 2>/dev/null)"; then
+    echo "❌ Не удалось создать лог установки в ${_log_dir}. Задайте AISTACK_LOG=<файл>." >&2
+    exit 1
+  fi
+fi
+
+# Приватный рабочий каталог этого запуска (700; удаляется при выходе): временные
+# файлы с секретами, архив шаблонов, heartbeat — не по предсказуемым путям /tmp.
+if ! AISTACK_WORK="$(mktemp -d "${TMPDIR:-/tmp}/aistack-work.XXXXXX" 2>/dev/null)"; then
+  echo "❌ Не удалось создать рабочий каталог во временной папке ${TMPDIR:-/tmp}." >&2
+  exit 1
+fi
 
 # ── Логирование ─────────────────────────────────────────────────────────────
 say()     { echo "${CYA}▸${RST} $*"; }
@@ -26,10 +47,13 @@ substep() { echo "  ${CYA}↳${RST} $*"; heartbeat; }
 # AISTACK_DRY_RUN=1 → команды только печатаются в лог, не выполняются.
 run() {
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then
-    echo "[dry-run] $*" >> "$LOG"
+    printf '[dry-run] %s\n' "$(mask_secrets "$*")" >> "$LOG"
     return 0
   fi
-  "$@" >> "$LOG" 2>&1
+  # вывод команды тоже может содержать секреты (эхо конфига, ошибки CLI) —
+  # маскируем поток; код возврата — самой команды
+  { "$@" 2>&1; } | mask_stream >> "$LOG"
+  return "${PIPESTATUS[0]}"
 }
 
 # ── Спиннер пока жив фоновый процесс $1 ─────────────────────────────────────
@@ -56,8 +80,39 @@ redact() {
   sed -E \
     -e 's/[0-9]{8,12}:[A-Za-z0-9_-]{30,}/[TG_TOKEN]/g' \
     -e 's/sk-[A-Za-z0-9_-]{20,}/sk-[REDACTED]/g' \
+    -e 's/AIza[A-Za-z0-9_-]{30,}/AIza[REDACTED]/g' \
     -e 's/(API_KEY[^=]*=)[^ ]+/\1[REDACTED]/g'
 }
+
+# Маскирует уже известные секреты (API_KEY, TG_TOKENS) буквально — даже если
+# их формат не ловится шаблонами redact — и затем прогоняет через redact.
+mask_secrets() {
+  local s="$*" v
+  for v in "${API_KEY:-}" ${TG_TOKENS[@]+"${TG_TOKENS[@]}"}; do
+    [ -n "$v" ] && s="${s//"$v"/[REDACTED]}"
+  done
+  printf '%s\n' "$s" | redact
+}
+
+# То же для потока (stdin → stdout): известные секреты заменяются буквально,
+# затем шаблоны redact. Правила для sed пишутся во временный файл 600, а НЕ
+# передаются аргументами: argv любого процесса виден другим пользователям (ps).
+mask_stream() {
+  local v n=0 f
+  if ! f="$(mktemp "$AISTACK_WORK/mask.XXXXXX" 2>/dev/null)"; then
+    cat > /dev/null; echo "[вывод скрыт: не удалось подготовить маскировку секретов]"; return 0
+  fi
+  for v in "${API_KEY:-}" ${TG_TOKENS[@]+"${TG_TOKENS[@]}"}; do
+    [ -n "$v" ] || continue
+    printf 's/%s/[REDACTED]/g\n' "$(printf '%s' "$v" | sed 's/[][\/.^$*+?(){}|]/\\&/g')" >> "$f"
+    n=$((n + 1))
+  done
+  if [ "$n" -eq 0 ]; then redact; else sed -E -f "$f" | redact; fi
+  rm -f "$f"
+}
+
+# Строка для JSON5 в двойных кавычках (\ и ")
+_json_str() { local s="${1//\\/\\\\}"; printf '%s' "${s//\"/\\\"}"; }
 
 # run_step "сообщение" cmd...  → тихо (в лог) + спиннер, фатально при ошибке
 run_step() {
@@ -94,7 +149,7 @@ retry() {
 
 # ── Watchdog (БРИФ-7) — прибивает зомби-процессы по тишине heartbeat ─────────
 WATCHDOG_PID=""
-WATCHDOG_HEARTBEAT_FILE="${AISTACK_HB:-/tmp/aistack-heartbeat-$$}"
+WATCHDOG_HEARTBEAT_FILE="${AISTACK_HB:-$AISTACK_WORK/heartbeat}"
 touch "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true
 get_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 heartbeat() { touch "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true; }
@@ -136,7 +191,7 @@ CURRENT_STAGE="инициализация"
 install_traps() {
   trap 'echo ""; err "Установка прервана пользователем (Ctrl+C). Запустите команду заново."; rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null; stop_watchdog; exit 130' INT TERM
   trap 'EXIT_CODE=$?; if [ "$EXIT_CODE" = "130" ]; then err "Установка прервана (Ctrl+C). Запустите заново."; else err "Ошибка на стейдже: ${CURRENT_STAGE}. Лог: $LOG"; fi; rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null; stop_watchdog; exit "$EXIT_CODE"' ERR
-  trap 'rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true; stop_watchdog' EXIT
+  trap 'rm -f "$WATCHDOG_HEARTBEAT_FILE" 2>/dev/null || true; stop_watchdog; rm -rf "$AISTACK_WORK" 2>/dev/null || true' EXIT
 }
 
 # ── parse_key (порт parseAccessKey из private-installer.html) ────────────────
@@ -170,17 +225,18 @@ parse_key() {
   esac
 
   # SMALLBIZ — отдельная вертикаль «Малый бизнес» (5 ботов-отделов),
-  # допустима на любом тарифе (ценовую матрицу решает генератор ключей)
+  # COACH — команда начинающего помогающего эксперта (3 роли); обе допустимы
+  # на любом тарифе (ценовую матрицу решает генератор ключей)
   case " PROFI TEAM PERSONAL " in
     *" $tariff "*)
-      case " FULL SMALLBIZ " in
+      case " FULL SMALLBIZ COACH " in
         *" $preset "*) :;;
-        *) KEY_ERROR="Тариф $tariff требует сборку FULL или SMALLBIZ (в ключе: $preset). Поддержка: @superwalletsru."; return 1;;
+        *) KEY_ERROR="Тариф $tariff требует сборку FULL, SMALLBIZ или COACH (в ключе: $preset). Поддержка: @superwalletsru."; return 1;;
       esac;;
     *)
-      case " CONTENT SALES EXPERT BUSINESS SCHOOL TECH SMALLBIZ ADMIN " in
+      case " CONTENT SALES EXPERT BUSINESS SCHOOL TECH SMALLBIZ ADMIN COACH " in
         *" $preset "*) :;;
-        *) KEY_ERROR="Сборка $preset не существует. Для $tariff допустимы: CONTENT, SALES, EXPERT, BUSINESS, SCHOOL, TECH, SMALLBIZ, ADMIN."; return 1;;
+        *) KEY_ERROR="Сборка $preset не существует. Для $tariff допустимы: CONTENT, SALES, EXPERT, BUSINESS, SCHOOL, TECH, SMALLBIZ, ADMIN, COACH."; return 1;;
       esac;;
   esac
 
@@ -198,6 +254,9 @@ parse_key() {
     FULL)     PRESET_ID="full-team";     AGENTS="coordinator tech producer marketer designer copywriter contentmaker negotiator";;
     SMALLBIZ) PRESET_ID="smallbiz-team"; AGENTS="voice pero rost chasy khozyain";;
     ADMIN)    PRESET_ID="admin-solo";    AGENTS="admin";;
+    # coordinator здесь — координатор-технарь (своя версия шаблона в
+    # templates/_presets/coach-team/), отдельного агента tech в сборке нет
+    COACH)    PRESET_ID="coach-team";    AGENTS="coordinator designer copywriter";;
   esac
   AGENT_COUNT=$(printf '%s\n' $AGENTS | grep -c .)
 

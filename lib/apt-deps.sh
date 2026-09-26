@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ============================================================================
 # apt-deps.sh — системные зависимости. apt (Debian/Ubuntu, +DEBIAN_FRONTEND из
-# БРИФ-10) / brew (macOS). Python ≥ 3.11 (не хардкод 3.11) и Node ≥ 20 (NodeSource).
+# БРИФ-10) / brew (macOS). Python ≥ 3.11 (не хардкод 3.11) и Node ≥ 22.19 (NodeSource).
 # Выставляет глобально: PYTHON_BIN — интерпретатор для venv Hermes.
 # ============================================================================
 
@@ -22,7 +22,8 @@ _deps_debian() {
 
   local SUDO=""
   if [ "$(id -u)" -ne 0 ]; then
-    if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else
+    # dry-run: команды только печатаются в лог, sudo не нужен и не вызывается
+    if command -v sudo >/dev/null 2>&1 || [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then SUDO="sudo"; else
       err "Нужны права root для установки системных пакетов, но sudo не найден."
       err "Запустите от root или установите sudo."
       exit 1
@@ -30,13 +31,19 @@ _deps_debian() {
   fi
 
   run_step "Обновляю списки пакетов (apt-get update)" $SUDO apt-get update -y
-  # Базовые пакеты. software-properties-common даёт add-apt-repository (для deadsnakes).
-  # nodejs здесь НЕ ставим — Node ставит NodeSource (apt-овый слишком старый, см. ensure_node).
-  run_step "Ставлю базовые пакеты (git, curl, sqlite, ripgrep, ffmpeg, tools)" \
-    $SUDO apt-get install -y --no-install-recommends \
-      ca-certificates curl git gnupg xz-utils sqlite3 ripgrep ffmpeg \
-      software-properties-common
-  ensure_python_311_or_newer "$SUDO"
+  # NodeSource и OpenClaw нужны обеим сборкам; Node ставит ensure_node.
+  if [ "${PRESET_ID:-}" = "coach-team" ]; then
+    run_step "Ставлю зависимости COACH (curl, git, сертификаты, NodeSource tools)" \
+      $SUDO apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg xz-utils
+  else
+    # Для дополнительных сборок оставляем Python/Hermes и медиа-утилиты.
+    run_step "Ставлю базовые пакеты (git, curl, sqlite, ripgrep, ffmpeg, tools)" \
+      $SUDO apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg xz-utils sqlite3 ripgrep ffmpeg \
+        software-properties-common
+    ensure_python_311_or_newer "$SUDO"
+  fi
   ensure_node "$SUDO"
   ok "Системные зависимости установлены"
 }
@@ -47,9 +54,13 @@ _deps_macos() {
     err '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
     exit 1
   fi
-  # python@3.11 — минимально требуемая ветка; node свежий через brew по умолчанию
-  run_step "Ставлю зависимости через brew (python@3.11, node, git, sqlite, ripgrep, ffmpeg)" \
-    brew install python@3.11 node git sqlite ripgrep ffmpeg
+  if [ "${PRESET_ID:-}" = "coach-team" ]; then
+    run_step "Ставлю зависимости COACH через brew (node, git)" brew install node git
+  else
+    # python@3.11 — минимально требуемая ветка для дополнительного Hermes.
+    run_step "Ставлю зависимости через brew (python@3.11, node, git, sqlite, ripgrep, ffmpeg)" \
+      brew install python@3.11 node git sqlite ripgrep ffmpeg
+  fi
   ok "Системные зависимости установлены (brew)"
 }
 
@@ -116,24 +127,27 @@ _has_python_311_or_newer() {
 # Находит лучший python ≥ 3.11 → PYTHON_BIN (используется для venv Hermes)
 resolve_python() {
   local cand
+  # dry-run: Python не запускаем вовсе. На macOS шаг Hermes попадает сюда с
+  # пустым PYTHON_BIN, а системный python3 от Apple при `-c` пишет кэш
+  # байткода в ~/Library/Caches/com.apple.python — dry-run менял бы HOME.
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then PYTHON_BIN="python3"; ok "Python (dry-run, пропуск)"; return 0; fi
   for cand in python3.13 python3.12 python3.11 python3; do
     if command -v "$cand" >/dev/null 2>&1 \
        && "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,11) else 1)' 2>/dev/null; then
       PYTHON_BIN="$(command -v "$cand")"; ok "Python: $PYTHON_BIN ($("$cand" --version 2>&1))"; return 0
     fi
   done
-  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then PYTHON_BIN="python3"; ok "Python (dry-run): python3"; return 0; fi
   err "Не найден Python ≥ 3.11. Hermes требует Python ≥ 3.11."
   exit 1
 }
 
-# ── Node ≥ 20 (FIX: удалить старый apt-Node 12, поставить NodeSource 22) ────────
+# ── Node ≥ 22.19 (FIX: удалить старый apt-Node 12, поставить NodeSource 22) ─────
 # В Ubuntu 22.04 apt даёт Node 12 → OpenClaw падает (nullish `??` = Node 14+).
 # Если старый nodejs уже стоит, NodeSource НЕ заменяет его без явного remove
 # (конфликт distro-nodejs ↔ nodesource) — поэтому сначала сносим, потом ставим.
 ensure_node() {
   local SUDO="$1"
-  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Node.js ≥20 (dry-run, пропуск)"; return 0; fi
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Node.js ≥22.19 (dry-run, пропуск)"; return 0; fi
   if _node_ok; then ok "Node.js свежий ($(node --version 2>/dev/null))"; return 0; fi
 
   # 1) удаляем старый apt-овый nodejs (Node 12), чтобы NodeSource не конфликтовал
@@ -150,19 +164,19 @@ ensure_node() {
   run_step "Ставлю Node.js 22 (включает npm)" $SUDO apt-get install -y nodejs
   hash -r 2>/dev/null || true   # сбрасываем кэш путей bash, чтобы node указывал на новый бинарь
 
-  # 4) проверяем версию — если всё ещё < 20, дальше идти нет смысла (Stage 4 упадёт)
+  # 4) проверяем версию — если всё ещё < 22.19, дальше идти нет смысла (Stage 4 упадёт)
   if _node_ok; then
     ok "Node.js установлен ($(node --version 2>/dev/null))"
   else
-    err "Node.js всё ещё < 20 после NodeSource (сейчас: $(node --version 2>/dev/null || echo 'нет'))."
-    err "OpenClaw требует Node ≥ 20. Проверьте deb.nodesource.com / сеть и запустите заново."
+    err "Node.js всё ещё < 22.19 после NodeSource (сейчас: $(node --version 2>/dev/null || echo 'нет'))."
+    err "OpenClaw $OPENCLAW_PIN требует Node ≥ 22.19. Проверьте deb.nodesource.com / сеть и запустите заново."
     exit 1
   fi
 }
 
-# true, если node ≥ 20
+# true, если node ≥ 22.19 — engines.node пина openclaw@2026.6.5 (">=22.19.0");
+# Node 20/21 и 22.0–22.18 раньше проходили проверку, а OpenClaw на них не заявлен
 _node_ok() {
   command -v node >/dev/null 2>&1 || return 1
-  local major; major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-  [ "${major:-0}" -ge 20 ] 2>/dev/null
+  node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=19)?0:1)' 2>/dev/null
 }

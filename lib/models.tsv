@@ -1,0 +1,10 @@
+# provider	model	default	note
+# Офлайн-список для выбора модели при установке (bash и PowerShell читают этот файл).
+# Источник: документация openclaw@2026.6.5 (docs/providers/*.md в npm-пакете пина).
+# Доступность модели для ключа клиента офлайн не проверяется — это живая проверка.
+openai	openai/gpt-5.5	1	стабильный выбор по документации OpenClaw
+openai	openai/gpt-5.4-mini	0	легче и дешевле
+anthropic	anthropic/claude-sonnet-4-6	1	прежний выбор установщика
+anthropic	anthropic/claude-opus-4-8	0	сильнее и дороже
+openrouter	openrouter/auto	1	роутер OpenRouter сам выбирает модель
+google	google/gemini-3.1-pro-preview	1	модель по умолчанию в документации OpenClaw (ключ AIza…)

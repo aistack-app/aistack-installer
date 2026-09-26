@@ -1,6 +1,6 @@
 # AIStack installer (v1.5)
 
-Установка AI-команды **одной командой** в Terminal. Никаких bundle.zip, никакой распаковки.
+Проект клиентского установщика AI-команды. **Не используйте приведённые ниже команды для клиентов:** опубликованный `install.sh` доступен (HTTP 200), но это старая версия из `main`; `install.ps1` и `lib/models.tsv` на GitHub Pages отвечают 404. Новая сборка COACH и исправление Windows W1 находятся в черновом PR #1; живая клиентская установка команды не принята. Команды ниже — предполагаемый интерфейс **после публикации и сквозной приёмки**, не рабочая инструкция на сегодня.
 
 ```bash
 bash <(curl -fsSL https://aistack-app.github.io/aistack-installer/install.sh) ВАШ-КЛЮЧ
@@ -8,23 +8,58 @@ bash <(curl -fsSL https://aistack-app.github.io/aistack-installer/install.sh) В
 
 Пример ключа: `AIS-TEAM-FULL-A7B3XK92`
 
+**Windows** (PowerShell 5.1, без WSL; пока только сборка COACH). Неповышенный запуск **самопроверки на заглушках** подтверждён; установка настоящего OpenClaw и Node без админправ не подтверждена. После публикации клиентского релиза предполагается:
+```powershell
+iwr -useb https://aistack-app.github.io/aistack-installer/install.ps1 -OutFile "$env:TEMP\aistack-install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\aistack-install.ps1" ВАШ-КЛЮЧ
+```
+
 ## Платформы
-- ✅ macOS (Intel + Apple Silicon)
-- ✅ Ubuntu 22.04+
-- ✅ Debian 12+
-- ❌ Windows — не в v1.5 (для Windows напишите [@superwalletsru](https://t.me/superwalletsru) про Personal-тариф)
+- 🧪 macOS (Intel + Apple Silicon) — офлайн-набор на заглушках пройден на Mac; клиентская установка не проверена.
+- 🧪 Ubuntu 22.04+ / Debian 12+ — заявленные цели. В одноразовом Ubuntu 24.04 Docker-контейнере установлены системные зависимости и настоящий OpenClaw 2026.6.5, созданы 3 workspace и конфиг; автозапуск gateway не прошёл, так как в контейнере нет пользовательского `systemd`. Установка на обычной Ubuntu с `systemd` не подтверждена.
+- 🧪 Windows 10 20H2+ / 11 — нативный `install.ps1`, только сборка COACH. На реальной Windows 11 пройден один W1-прогон самопроверки на заглушках: Windows PowerShell 5.1.22621.6133, `ADMIN=False`, `SELFTEST_EXIT=0`; контроль PowerShell сам создавал `AppData` и `AppData/Roaming`. **Реальная установка OpenClaw/Node, winget, Scheduled Task, модель, Telegram-боты и vault не проверялись.** На Windows Hermes не ставится.
+
+## Сборки
+Ключ `AIS-<ТАРИФ>-<СБОРКА>-<СЛУЧАЙНАЯ ЧАСТЬ>`. Сборка **COACH** — команда начинающего помогающего
+эксперта: координатор-технарь, дизайнер, копирайтер (3 Telegram-бота), память команды —
+папка-vault на компьютере клиента (открывается в Obsidian). Шаблоны ролей —
+`templates/_presets/coach-team/`, скелет vault — `templates/_vault/`.
+Генерация картинок, движок «Твоим голосом», видео и Telegram-воронка в этой версии **не подключены**:
+шаблоны честно помечают их как ручной этап до отдельной проверки.
 
 ## Что делает
+0. Сначала запрашивает API-ключ провайдера, модель (список — `lib/models.tsv`),
+   Telegram-токены, а для COACH — **числовой Telegram ID владельца** и папку
+   памяти. Без ID реальная установка COACH останавливается до скачивания пакетов.
+   Офлайн отсекает пустые ключи, заглушки и ошибки формата, **но не проверяет
+   доступ к модели**. Авторизация подпиской ChatGPT/Codex через OAuth пока
+   не реализована.
 1. Проверяет систему (ОС, архитектура, интернет, диск)
-2. Ставит системные зависимости (Python 3.11+, Node, git, sqlite, ripgrep, ffmpeg)
-3. Hermes runtime — через PyPI-пакет `hermes-agent` в свой venv (**без Chromium** → ARM-safe)
-4. OpenClaw — `npm install -g openclaw`
-5. Шаблоны команды — тянет с публичного репо шаблонов
-6. Спрашивает API-ключ нейросети + Telegram-токены ботов
-7. Регистрирует агентов
-8. Запускает и показывает dashboard `http://localhost:18789`
+2. На macOS/Linux ставит Node и базовые инструменты; для COACH не ставит
+   Python/Hermes и медиа-пакеты. Для других сборок дополнительно ставит Python
+   3.11+, sqlite, ripgrep, ffmpeg; требования Node ≥22.19 проверяются не во всех
+   ветках.
+3. Для COACH на macOS/Linux не ставит второй runtime: агенты и файловая память
+   работают в OpenClaw, а память проекта хранится в отдельном vault. Для других
+   сборок Hermes пока устанавливается отдельно; его клиентская роль не принята.
+4. На macOS/Linux ставит закреплённый `openclaw@2026.6.5` через npm;
+   на Windows вызывает официальный `install.ps1 -Tag 2026.6.5 -NoOnboard`.
+   Команды CLI пина проверены в отдельном профиле с фиктивными ключами;
+   полноценная клиентская установка и ответы Telegram-ботов пока не подтверждены.
+5. Копирует шаблоны команды из архива (в сетевом режиме — из публичного репозитория).
+6. Сохраняет ключ и модель в OpenClaw, создаёт vault (COACH), персонализирует шаблоны.
+   Секреты передаются OpenClaw через файлы, а не через аргументы команд:
+   ключ — `openclaw config patch --file` (временный файл удаляется), токены
+   ботов — `--token-file` из каталога секретов в профиле клиента. На Unix
+   права ограничиваются `chmod 600`/`700`, на Windows полагаются на ACL профиля;
+   реальная стойкость и совместимость с закреплённой версией OpenClaw не приняты.
+7. Регистрирует агентов и читает обратно конфиг: наличие аккаунтов, привязок,
+   каталогов, allowlist каждого бота и владельца команд. При несовпадении сообщает
+   о незавершённой установке.
+8. Пытается запустить gateway и проверяет RPC. Даже успешный итог означает
+   только подтверждённый конфиг и gateway, **не ответ модели и не ответы ботов**.
 
-Время установки: ~3–5 минут (без browser-tools).
+Время клиентской установки этой ветки ещё не измерено.
 
 ## Структура
 ```
@@ -32,26 +67,64 @@ install.sh            точка входа (само-бутстрап: груз
 lib/helpers.sh        цвета, логи, спиннер, прогресс, traps, watchdog, retry, parse_key
 lib/preflight.sh      detect_os / detect_arch / интернет / диск
 lib/apt-deps.sh       системные пакеты (apt / brew) + DEBIAN_FRONTEND
-lib/hermes-setup.sh   Hermes через pip (venv + hermes-agent)
+lib/hermes-setup.sh   дополнительный Hermes для других сборок (COACH не использует)
 lib/openclaw-setup.sh OpenClaw + регистрация агентов
 lib/workspace-deploy.sh  шаблоны workspace по пресету
-lib/wizard.sh         сбор ключа / токенов / имени проекта
+lib/wizard.sh         сбор ключа / модели / токенов / vault (офлайн-проверка ключей)
+lib/models.tsv        офлайн-список моделей для выбора (общий для bash и PowerShell)
+install.ps1           Windows-установщик (PowerShell 5.1+, UTF-8 с BOM), только COACH
+templates/_presets/   версии ролей под конкретную сборку (coach-team)
+templates/_vault/     скелет памяти команды
+tests/                офлайн-тесты: bash tests/run.sh
 ```
 
 ## Тестовый прогон (без установки)
 ```bash
-AISTACK_DRY_RUN=1 bash install.sh AIS-TEAM-FULL-DEV1234
+AISTACK_DRY_RUN=1 bash install.sh AIS-START-COACH-TEST0001
 ```
+В dry-run без ключей подставляются явные заглушки. В реальной установке заглушки,
+пустые и заведомо неверные ключи отклоняются (`AIS-TEAM-FULL-DEV1234` больше не
+включает заглушки). Офлайн нельзя доказать, что ключ рабочий: это видно только
+при первом живом запросе к провайдеру.
+
+## Тесты
+```bash
+bash tests/run.sh
+```
+Офлайн, в песочнице (свой HOME/TMPDIR, заглушки sudo/curl/npm/openclaw/python/браузера),
+только выдуманные ключи. `test_first_run` — реальный (не dry-run) первый запуск COACH
+с тремя ботами на заглушках: порядок команд, доставка ключа/токенов файлами, отсутствие
+секретов в аргументах любых процессов, отсутствие записи вне временных каталогов. Проверки Windows-установщика выполняются, если есть `pwsh`
+(иначе — явный SKIP); это не замена прогону на реальной Windows.
+
+Самопроверка на нативной Windows (PowerShell 5.1, **обычное неповышенное окно**,
+без ключей и установки OpenClaw — заглушки `openclaw.cmd`/`openclaw.ps1`,
+профиль с кириллицей и пробелом):
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows\selftest.ps1
+```
+Запускать из **локального каталога этой ревизии**: текущий Pages ещё не
+публикует `install.ps1`. Опция `-Keep` сохраняет песочницу для диагностики; отчёт записывается
+в `%TEMP%\aistack-selftest-report-*.txt`. После W1 `0008` самопроверка сравнивает
+дерево профиля с контрольным запуском той же Windows PowerShell. Её `exit 0`
+проверяет поведение скрипта на заглушках, **не** устанавливает движок, не
+подключает модель и не доказывает, что настоящие боты отвечают.
 
 ## Переменные окружения (для отладки/CI)
 | Переменная | Назначение |
 |---|---|
 | `AISTACK_DRY_RUN=1` | не выполнять системные команды, только печатать |
 | `AISTACK_NONINTERACTIVE=1` | без интерактива (брать ключ/токены из env) |
-| `AISTACK_API_KEY` | API-ключ в неинтерактивном режиме |
-| `AISTACK_TG_TOKENS` | TG-токены через пробел |
+| `AISTACK_API_KEY` | API-ключ в неинтерактивном режиме (обязателен вне dry-run) |
+| `AISTACK_TG_TOKENS` | TG-токены через пробел — ровно по одному на агента |
+| `AISTACK_OWNER_TG_ID` | числовой Telegram ID владельца; обязателен для реальной COACH-установки |
+| `AISTACK_PROVIDER` | провайдер, если его не видно по ключу (`openai` по умолчанию; `AIza…` → `google`) |
+| `AISTACK_MODEL` | модель `провайдер/модель` (по умолчанию — рекомендованная из `lib/models.tsv`) |
+| `AISTACK_VAULT` | папка памяти команды для COACH (по умолчанию `~/AIStack-Vault`) |
+| `AISTACK_TEMPLATES_DIR` | локальный каталог шаблонов вместо скачивания (тесты, разработка) |
+| `AISTACK_LOG` | путь к логу (по умолчанию — новый временный файл с правами 600) |
 | `AISTACK_BASE_URL` | откуда грузить lib/ (по умолчанию github pages) |
 | `AISTACK_TEMPLATES_URL` | tarball с workspace-templates |
-| `AISTACK_HERMES_SPEC` | pip-спец Hermes (по умолчанию `hermes-agent`) |
+| `AISTACK_HERMES_SPEC` | pip-спец дополнительного Hermes для сборок, отличных от COACH |
 
-Powered by Hermes + OpenClaw (open source).
+COACH работает на OpenClaw (open source); отдельный Hermes ему не требуется.

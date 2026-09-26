@@ -78,9 +78,9 @@ _hermes_start() {
   # (HTTP-порта 7777 у пакета нет, это было ошибочное наследие старой bundle-архитектуры).
   local HBIN="$HERMES_HOME/venv/bin/hermes"
   local serve_cmd="${AISTACK_HERMES_SERVE_CMD:-gateway}"
-  mkdir -p "$HERMES_HOME/logs" 2>/dev/null || true
 
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Hermes gateway (dry-run, пропуск)"; return 0; fi
+  mkdir -p "$HERMES_HOME/logs" 2>/dev/null || true
 
   substep "Запускаю Hermes ($serve_cmd) в фоне"
   nohup "$HBIN" $serve_cmd >> "$HERMES_HOME/logs/gateway.log" 2>&1 &

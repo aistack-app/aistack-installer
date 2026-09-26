@@ -28,7 +28,11 @@ openclaw_install() {
   fi
 
   local cur=""
-  cur="$(openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  # dry-run: уже установленный OpenClaw не запускаем даже для --version —
+  # CLI может писать в ~/.openclaw (логи/состояние), а dry-run не меняет HOME
+  if [ "${AISTACK_DRY_RUN:-0}" != "1" ]; then
+    cur="$(openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  fi
   if [ "$cur" = "$OPENCLAW_PIN" ]; then
     ok "OpenClaw $OPENCLAW_PIN уже установлен"
   else
@@ -68,6 +72,7 @@ openclaw_install() {
 # умолчанию). Дописываем в rc-файлы только если строки ещё нет.
 _persist_npm_global_path() {
   local line='export PATH="$HOME/.npm-global/bin:$PATH"' rc
+  [ "${AISTACK_DRY_RUN:-0}" = "1" ] && return 0   # dry-run не трогает rc-файлы
   for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
     [ -f "$rc" ] || continue
     grep -qsF '.npm-global/bin' "$rc" || echo "$line" >> "$rc"
@@ -91,25 +96,34 @@ openclaw_verify_memory() {
 # старый вариант молча не работал.
 openclaw_set_provider() {
   CURRENT_STAGE="Stage 6b: provider"
+  local envvar f
   case "$PROVIDER" in
-    anthropic)
-      run_soft "Модель по умолчанию: anthropic/claude-sonnet-4-6" \
-        openclaw config set agents.defaults.model.primary "anthropic/claude-sonnet-4-6"
-      run_soft "Сохраняю API-ключ (env.vars)" \
-        openclaw config set env.vars.ANTHROPIC_API_KEY "$API_KEY";;
-    openrouter)
-      run_soft "Сохраняю API-ключ OpenRouter (env.vars)" \
-        openclaw config set env.vars.OPENROUTER_API_KEY "$API_KEY"
-      # Без этого дефолт остаётся openai/* без ключа → каждый ответ бота
-      # падает «Missing API key for provider openai» (поймано на живом VPS).
-      # openrouter/auto — роутер OpenRouter, сам выбирает доступную модель.
-      run_soft "Модель по умолчанию: openrouter/auto" \
-        openclaw config set agents.defaults.model.primary "openrouter/auto";;
-    *)
-      run_soft "Сохраняю API-ключ (env.vars)" \
-        openclaw config set "env.vars.$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY" "$API_KEY"
-      warn "Провайдер $PROVIDER: модель выберите после установки (dashboard → Settings)";;
+    google) envvar="GEMINI_API_KEY";;   # docs/providers/google.md пина
+    *)      envvar="$(printf '%s' "$PROVIDER" | tr '[:lower:]' '[:upper:]')_API_KEY";;
   esac
+  # Ключ — через файл-патч (600, приватный каталог), а не аргументом:
+  # argv виден всем пользователям машины (ps). `config patch` сливает объекты.
+  if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then
+    f="$AISTACK_WORK/provider-key.json5"
+  else
+    f="$(mktemp "$AISTACK_WORK/provider-key.XXXXXX")"
+    printf '{ env: { vars: { %s: "%s" } } }\n' "$envvar" "$(_json_str "$API_KEY")" > "$f"
+  fi
+  run_soft "Сохраняю API-ключ (env.vars.$envvar, через файл)" \
+    openclaw config patch --file "$f"
+  rm -f "$f"
+  # Модель — выбранная в wizard (lib/models.tsv или свой id), а не жёстко
+  # заданная. Без явной модели дефолт OpenClaw может указать на провайдера без
+  # ключа → «Missing API key for provider …» (поймано на живом VPS с OpenRouter).
+  # TO-VERIFY (живой запуск): по docs/providers/openai.md пина агентные
+  # openai/* модели идут через Codex-harness, и одного OPENAI_API_KEY для них
+  # может не хватить (нужен Codex-совместимый auth-профиль). Офлайн не проверить.
+  if [ -n "${MODEL:-}" ]; then
+    run_soft "Модель по умолчанию: $MODEL" \
+      openclaw config set agents.defaults.model.primary "$MODEL"
+  else
+    warn "Модель не выбрана — выберите после установки: openclaw models set <провайдер/модель>"
+  fi
 }
 
 # Регистрация агентов-ботов. Реальный CLI пина (флага --telegram-token НЕ
@@ -119,21 +133,24 @@ openclaw_set_provider() {
 #   3) доступ владельцу (allowlist) — иначе бот встречает pairing-кодом
 register_bots() {
   CURRENT_STAGE="Stage 7: register agents"
-  local i=0 a tok registered=0
+  local i=0 a tok
   for a in $AGENTS; do
     tok="${TG_TOKENS[$i]:-}"
     if [ -n "$tok" ]; then
-      # именно --token: --bot-token телеграмом не принимается
-      # («Telegram requires token or --token-file») — поймано Docker-тестом
+      # --token-file, а не --token: токен не попадает в argv (виден через ps).
+      # OpenClaw хранит путь (tokenFile) и читает файл при работе — файл остаётся.
+      # («Telegram requires token or --token-file» — поймано Docker-тестом)
       run_soft "Telegram-аккаунт: $a" \
-        openclaw channels add --channel telegram --account "$a" --token "$tok"
+        openclaw channels add --channel telegram --account "$a" --token-file "$(tg_token_file "$a" "$tok")"
     fi
+    # Код agents add — только сведения: «уже существует» и настоящая ошибка
+    # выглядят одинаково. Что агент есть и привязан, решает verify_team
+    # (чтение конфига) — а не догадка по коду ошибки.
     if ( run openclaw agents add "$a" --non-interactive \
            --workspace "$WORKSPACE_BASE/workspace-$a" --bind "telegram:$a" ); then
-      registered=$((registered + 1))
       ok "Агент: $a"
     else
-      warn "Агент $a: agents add не отработал (возможно, уже существует) — см. лог $LOG"
+      warn "Агент $a: agents add не отработал (возможно, уже существует) — проверю чтением конфига"
     fi
     # Доступ только владельцу (если ID собран в wizard)
     if [ -n "${OWNER_TG_ID:-}" ]; then
@@ -153,8 +170,6 @@ register_bots() {
       openclaw config set commands.ownerAllowFrom "[\"telegram:$OWNER_TG_ID\"]" --strict-json
   fi
 
-  ok "Зарегистрировано агентов: $registered/$AGENT_COUNT"
-
   setup_smallbiz_runtime
 
   # Конфиг после всех правок ОБЯЗАН быть валидным — иначе gateway не стартует
@@ -167,6 +182,90 @@ register_bots() {
       exit 1
     fi
   fi
+
+  verify_team
+}
+
+# ── Итог установки: успех — только если всё подтверждено ────────────────────
+# Любая проблема копится здесь; при PROBLEM_COUNT > 0 install.sh не печатает
+# «AIStack установлен» и завершается с кодом 1.
+PROBLEM_COUNT=0
+PROBLEM_TEXT=""
+add_problem() {
+  PROBLEM_COUNT=$((PROBLEM_COUNT + 1))
+  PROBLEM_TEXT="${PROBLEM_TEXT}  - $*
+"
+  warn "$*"
+}
+
+# JSON в одну строку без пробелов МЕЖДУ токенами (внутри строк — сохраняются:
+# путь к HOME может содержать пробел); _split_before <regex> — перевод строки
+# перед каждым совпадением (awk/sed без GNU-расширений: работает и на macOS)
+_json_flat()     { tr -d '\r\n' | sed -E 's/(:|,|[{]|\[)[[:space:]]+/\1/g'; }
+_split_before()  { awk -v k="$1" '{ gsub(k, "\n&"); print }'; }
+
+# Проверки по схеме конфига OpenClaw (docs пина): agents.list[].id/workspace,
+# bindings[].agentId + match{channel,accountId}, channels.telegram.accounts.<id>
+_agent_ok() {    # <agents.list json> <id> <workspace>
+  printf '%s' "$1" | _split_before '"id":' | grep -F "\"id\":\"$2\"" \
+    | grep -qF -e "\"workspace\":\"$3\"" -e "\"workspace\":\"~/.openclaw/workspace-$2\""
+}
+_binding_ok() {  # <bindings json> <id>
+  printf '%s' "$1" | _split_before '"agentId":' | grep -F "\"agentId\":\"$2\"" \
+    | grep -F '"channel":"telegram"' | grep -qF "\"accountId\":\"$2\""
+}
+_account_ok() {  # <channels.telegram.accounts json> <id>
+  printf '%s' "$1" | _split_before '"[A-Za-z0-9_-]+":[{]' | grep -F "\"$2\":{" \
+    | grep -qE '"(tokenFile|botToken)":'
+}
+_account_access_ok() { # <one account json> <numeric owner id>
+  printf '%s' "$1" | grep -qF '"dmPolicy":"allowlist"' \
+    && printf '%s' "$1" | grep -qF "\"allowFrom\":[\"$2\"]"
+}
+
+# verify_team — read-back: для каждой роли в конфиге OpenClaw есть Telegram-
+# аккаунт с токеном, агент с НАШИМ рабочим каталогом и привязка telegram:<роль>
+verify_team() {
+  CURRENT_STAGE="Stage 7c: проверка команды"
+  [ "${AISTACK_DRY_RUN:-0}" = "1" ] && return 0
+  local al bl cl a access commands_owner
+  al="$(openclaw config get agents.list --json 2>/dev/null | _json_flat || true)"
+  bl="$(openclaw config get bindings --json 2>/dev/null | _json_flat || true)"
+  cl="$(openclaw config get channels.telegram.accounts --json 2>/dev/null | _json_flat || true)"
+  if [ "${PRESET_ID:-}" = "coach-team" ] && [ -z "${OWNER_TG_ID:-}" ]; then
+    add_problem "Не задан Telegram ID владельца COACH"
+  fi
+  for a in $AGENTS; do
+    _account_ok "$cl" "$a" || add_problem "Telegram-аккаунт $a не найден в конфиге OpenClaw (бот не подключён)"
+    _agent_ok "$al" "$a" "$WORKSPACE_BASE/workspace-$a" \
+      || add_problem "Агент $a не найден в конфиге или работает из другого каталога (нужен $WORKSPACE_BASE/workspace-$a)"
+    _binding_ok "$bl" "$a" || add_problem "Агент $a не привязан к боту telegram:$a"
+    if [ -n "${OWNER_TG_ID:-}" ]; then
+      access="$(openclaw config get "channels.telegram.accounts.$a" --json 2>/dev/null | _json_flat || true)"
+      _account_access_ok "$access" "$OWNER_TG_ID" \
+        || add_problem "Не подтверждён доступ владельца к боту $a (dmPolicy/allowFrom)"
+    fi
+  done
+  if [ -n "${OWNER_TG_ID:-}" ]; then
+    commands_owner="$(openclaw config get commands.ownerAllowFrom --json 2>/dev/null | _json_flat || true)"
+    [ "$commands_owner" = "[\"telegram:$OWNER_TG_ID\"]" ] \
+      || add_problem "Владелец команд не подтверждён в конфиге (commands.ownerAllowFrom)"
+  fi
+  [ "$PROBLEM_COUNT" -eq 0 ] && ok "Команда подтверждена чтением конфига: $AGENTS"
+  return 0
+}
+
+# tg_token_file <аккаунт> <токен> → путь к файлу токена (600, каталог 700).
+# Файл постоянный: channels.telegram.accounts.<id>.tokenFile читается gateway
+# при работе. В dry-run файл не создаётся. Токен пишется встроенным printf.
+tg_token_file() {
+  local d="$WORKSPACE_BASE/aistack-secrets" f
+  f="$d/telegram-$1.token"
+  if [ "${AISTACK_DRY_RUN:-0}" != "1" ]; then
+    ( umask 077; mkdir -p "$d" ) && chmod 700 "$d"
+    ( umask 077; printf '%s' "$2" > "$f" ) && chmod 600 "$f"
+  fi
+  printf '%s' "$f"
 }
 
 # Рантайм сборки «Малый бизнес»: событийная шина + интервалы HEARTBEAT
@@ -231,15 +330,15 @@ openclaw_start() {
   # провайдеров + плагинов) на медленном VPS легко занимает >15с —
   # поэтому окно 30с (10×3с), иначе ложный warn после рабочей установки.
   if [ "${AISTACK_DRY_RUN:-0}" = "1" ]; then ok "Gateway OK (dry-run)"; return 0; fi
+  # Подтверждение — код `gateway status --require-rpc` (docs пина: ненулевой,
+  # если read-RPC-проба не прошла), а не поиск слова «running» в тексте.
   local try=0
   while [ "$try" -lt 10 ]; do
-    if openclaw gateway status 2>/dev/null | grep -qiE "running|reachable"; then
-      ok "Gateway работает"
+    if run openclaw gateway status --require-rpc; then
+      ok "Gateway работает (RPC-проба прошла)"
       return 0
     fi
     try=$((try + 1)); sleep 3; heartbeat
   done
-  # Не дождались за 30с — но gateway уже запущен командой выше; на машинах
-  # без systemd (контейнеры) статус и не подтвердится — это норма.
-  warn "Gateway не подтвердил статус за 30с. Если вы на обычном сервере — проверьте: openclaw gateway status (в контейнере без systemd это ожидаемо)."
+  add_problem "Gateway не ответил на RPC-пробу за 30 с (проверка: openclaw gateway status --require-rpc)"
 }
