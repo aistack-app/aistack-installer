@@ -199,6 +199,11 @@ function Get-AisTgTokenProblem([string]$t) {
   if ($t -cnotmatch '^[0-9]{6,12}:[A-Za-z0-9_-]{30,}$') { return 'не похоже на токен @BotFather (ожидается 123456789:AA…)' }
   return ''
 }
+function Get-AisOwnerTgIdProblem([string]$id) {
+  if (-not $id) { return 'нужен Telegram ID владельца (узнать через @userinfobot)' }
+  if ($id -notmatch '^[0-9]{5,12}$') { return 'нужен числовой Telegram ID (5–12 цифр)' }
+  return ''
+}
 
 # ── Провайдер и модель (общий офлайн-список lib/models.tsv) ─────────────────
 function Get-AisProvider([string]$k) {
@@ -290,6 +295,13 @@ function Invoke-AisWizard($K) {
         if ($p) { Write-AisErr "AISTACK_TG_TOKENS, токен $($i + 1): $p."; exit 1 }
       }
     }
+    if (-not $script:DryRun) {
+      $p = Get-AisOwnerTgIdProblem $script:OwnerTgId
+      if ($p) { Write-AisErr "AISTACK_OWNER_TG_ID: $p. Без доступа владельца COACH не устанавливается."; exit 1 }
+    } elseif ($script:OwnerTgId) {
+      $p = Get-AisOwnerTgIdProblem $script:OwnerTgId
+      if ($p) { Write-AisErr "AISTACK_OWNER_TG_ID: $p."; exit 1 }
+    }
     $script:Provider = Get-AisProvider $script:ApiKey
     $script:Model = if ($env:AISTACK_MODEL) { $env:AISTACK_MODEL } else { Get-AisDefaultModel $script:Provider }
     if ($script:Model) {
@@ -352,9 +364,11 @@ function Invoke-AisWizard($K) {
 
   Write-Host ''
   Write-Host '  Ваш Telegram ID — чтобы боты отвечали только вам (узнать: @userinfobot).'
-  $script:OwnerTgId = Read-Host '  Telegram ID [Enter — настроить позже]'
-  if ($script:OwnerTgId -and $script:OwnerTgId -notmatch '^[0-9]{5,12}$') {
-    Write-AisWarn 'Не похоже на числовой ID — пропускаю (настроите позже: openclaw config set)'; $script:OwnerTgId = ''
+  while ($true) {
+    $script:OwnerTgId = Read-Host '  Telegram ID владельца (обязательно для COACH)'
+    $p = Get-AisOwnerTgIdProblem $script:OwnerTgId
+    if (-not $p) { break }
+    Write-AisWarn $p
   }
 
   Write-Host ''
@@ -601,10 +615,17 @@ function Test-AisTeam($K) {
   $bl = ConvertTo-AisList (Get-AisConfigJson 'bindings')
   $cl = Get-AisConfigJson 'channels.telegram.accounts'
   $before = $script:Problems.Count
+  if (-not $script:OwnerTgId) { Add-AisProblem 'Не задан Telegram ID владельца COACH' }
   foreach ($a in @($K.Agents -split ' ')) {
     $acc = Get-AisProp $cl $a
     if (-not ((Get-AisProp $acc 'tokenFile') -or (Get-AisProp $acc 'botToken'))) {
       Add-AisProblem "Telegram-аккаунт $a не найден в конфиге OpenClaw (бот не подключён)"
+    }
+    if ($script:OwnerTgId) {
+      $allowed = ConvertTo-AisList (Get-AisProp $acc 'allowFrom')
+      if ((Get-AisProp $acc 'dmPolicy') -cne 'allowlist' -or $allowed.Count -ne 1 -or [string]$allowed[0] -cne $script:OwnerTgId) {
+        Add-AisProblem "Не подтверждён доступ владельца к боту $a (dmPolicy/allowFrom)"
+      }
     }
     $want = Join-Path $wsBase "workspace-$a"
     $ag = $null; foreach ($x in $al) { if ((Get-AisProp $x 'id') -eq $a) { $ag = $x; break } }
@@ -617,6 +638,12 @@ function Test-AisTeam($K) {
       if ((Get-AisProp $b 'agentId') -eq $a -and (Get-AisProp $m 'channel') -eq 'telegram' -and (Get-AisProp $m 'accountId') -eq $a) { $bound = $true; break }
     }
     if (-not $bound) { Add-AisProblem "Агент $a не привязан к боту telegram:$a" }
+  }
+  if ($script:OwnerTgId) {
+    $commandsOwner = ConvertTo-AisList (Get-AisConfigJson 'commands.ownerAllowFrom')
+    if ($commandsOwner.Count -ne 1 -or [string]$commandsOwner[0] -cne ('telegram:' + $script:OwnerTgId)) {
+      Add-AisProblem 'Владелец команд не подтверждён в конфиге (commands.ownerAllowFrom)'
+    }
   }
   if ($script:Problems.Count -eq $before) { Write-AisOk ("Команда подтверждена чтением конфига: " + $K.Agents) }
 }

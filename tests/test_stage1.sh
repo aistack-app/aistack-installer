@@ -100,7 +100,7 @@ wz() {  # wz <переменные...> → "rc|PROVIDER|MODEL|VAULT_PATH" (пр�
 }
 wz_raw() {
   env -u AISTACK_DRY_RUN -u AISTACK_MODEL -u AISTACK_VAULT -u AISTACK_PROVIDER HOME="$SB_HOME" \
-    AISTACK_TG_TOKENS="111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001 222222222:FAKEtokenFAKEtokenFAKEtokenFAKE0002 333333333:FAKEtokenFAKEtokenFAKEtokenFAKE0003" \
+    AISTACK_OWNER_TG_ID=123456789 AISTACK_TG_TOKENS="111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001 222222222:FAKEtokenFAKEtokenFAKEtokenFAKE0002 333333333:FAKEtokenFAKEtokenFAKEtokenFAKE0003" \
     "$@" bash -c '
     . "$0/lib/helpers.sh"; . "$0/lib/wizard.sh"; parse_key AIS-START-COACH-TEST0001
     run_wizard >/dev/null 2>&1; rc=$?

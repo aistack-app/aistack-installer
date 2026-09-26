@@ -41,10 +41,24 @@ done
 order="$(grep -oE '^openclaw (channels add --channel telegram --account|agents add) [a-z]+' "$SB_CALLS" | awk '{print $NF}' | tr '\n' ' ')"
 [ "$order" = "coordinator coordinator designer designer copywriter copywriter " ] || { seq_ok=0; echo "         порядок: $order"; }
 [ "$seq_ok" = 1 ] && pass "3 бота: для каждой роли канал Telegram, затем агент с привязкой telegram:<роль>" || fail "регистрация ботов"
+access_ok=1
+for a in coordinator designer copywriter; do
+  grep -qxF "openclaw config set channels.telegram.accounts.$a.dmPolicy allowlist" "$SB_CALLS" || access_ok=0
+  grep -qF "openclaw config set channels.telegram.accounts.$a.allowFrom " "$SB_CALLS" || access_ok=0
+  grep -qxF "openclaw config get channels.telegram.accounts.$a --json" "$SB_CALLS" || access_ok=0
+done
+grep -qF 'openclaw config set commands.ownerAllowFrom ' "$SB_CALLS" || access_ok=0
+grep -qxF 'openclaw config get commands.ownerAllowFrom --json' "$SB_CALLS" || access_ok=0
+[ "$access_ok" = 1 ] && pass "доступ владельца записан и прочитан обратно для трёх ботов и команд" || fail "нет записи или read-back allowlist"
 grep -qx 'openclaw config validate' "$SB_CALLS" && grep -qx 'openclaw gateway install' "$SB_CALLS" && grep -qx 'openclaw gateway start' "$SB_CALLS" \
   && pass "конфиг валидируется, gateway ставится и запускается" || fail "нет validate/gateway install/start"
 grep -qx 'openclaw config set agents.defaults.model.primary openai/gpt-5.5' "$SB_CALLS" \
   && pass "модель по умолчанию — выбранная (openai/gpt-5.5)" || fail "модель не выставлена"
+if [ ! -e "$SB_HOME/.hermes" ] && ! grep -q 'hermes-agent' "$SB_CALLS"; then
+  pass "COACH ставит только нужный ботам OpenClaw, без отдельного Hermes runtime"
+else
+  fail "COACH тратит установку на Hermes, который не является памятью OpenClaw"
+fi
 
 # ── токены: из файлов 600, каждой роли — свой ────────────────────────────────
 tok_ok=1; i=0
@@ -77,9 +91,8 @@ done
 [ "$tmp_before" = "$tmp_after" ] && pass "вне временных каталогов песочницы в $TEST_TMP_BASE ничего не создано" \
   || fail "в $TEST_TMP_BASE появились: $(comm -13 <(echo "$tmp_before") <(echo "$tmp_after") | tr '\n' ' ')"
 top="$(ls -A "$SB_HOME" | sort | tr '\n' ' ')"
-[ "$top" = ".bashrc .hermes .local .openclaw AIStack-Vault " ] && pass "в HOME только ожидаемое: $top" || fail "в HOME: $top"
-[ "$(file_mode "$SB_HOME/.hermes/.env")" = 600 ] && pass "~/.hermes/.env (с ключом, по замыслу Hermes) — права 600" \
-  || fail "~/.hermes/.env права $(file_mode "$SB_HOME/.hermes/.env")"
+[ "$top" = ".bashrc .openclaw AIStack-Vault " ] && pass "в HOME только нужные COACH-каталоги: $top" || fail "в HOME: $top"
+[ ! -e "$SB_HOME/.hermes/.env" ] && pass "COACH не пишет лишнюю копию API-ключа в Hermes" || fail "неожиданный ~/.hermes/.env"
 [ -f "$SB_HOME/AIStack-Vault/profile/expert.md" ] && grep -q 'Нина Лебедева · сон' "$SB_HOME/AIStack-Vault/profile/expert.md" \
   && pass "vault создан и персонализирован" || fail "vault не создан"
 

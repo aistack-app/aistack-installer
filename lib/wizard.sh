@@ -81,6 +81,11 @@ tg_token_problem() {
     echo "не похоже на токен @BotFather (ожидается 123456789:AA…)"
   fi
 }
+owner_tg_id_problem() {
+  if [ -z "$1" ]; then echo "нужен Telegram ID владельца (узнать через @userinfobot)"
+  elif ! printf '%s' "$1" | grep -qE '^[0-9]{5,12}$'; then echo "нужен числовой Telegram ID (5–12 цифр)"
+  fi
+}
 
 run_wizard() {
   CURRENT_STAGE="Stage 6: wizard"
@@ -118,6 +123,13 @@ run_wizard() {
         if [ -n "$p" ]; then err "AISTACK_TG_TOKENS, токен $i: $p."; exit 1; fi
         i=$((i+1))
       done
+    fi
+    if [ "$PRESET_ID" = "coach-team" ] && [ "$dry" != "1" ]; then
+      p="$(owner_tg_id_problem "$OWNER_TG_ID")"
+      if [ -n "$p" ]; then err "AISTACK_OWNER_TG_ID: $p. Без доступа владельца COACH не устанавливается."; exit 1; fi
+    elif [ -n "$OWNER_TG_ID" ]; then
+      p="$(owner_tg_id_problem "$OWNER_TG_ID")"
+      if [ -n "$p" ]; then err "AISTACK_OWNER_TG_ID: $p."; exit 1; fi
     fi
     _infer_provider "$API_KEY"
     MODEL="${AISTACK_MODEL:-$(default_model "$PROVIDER")}"
@@ -164,17 +176,28 @@ run_wizard() {
   VAULT_PATH=""
   [ "$PRESET_ID" = "coach-team" ] && _ask_vault
 
-  # 2b) Telegram ID владельца — для allowlist: иначе боты встречают хозяина
-  # pairing-кодом, а любой посторонний может писать агентам.
+  # 2b) Telegram ID владельца обязателен для COACH до подключения ботов.
   echo ""
   echo "  Ваш Telegram ID — чтобы боты отвечали только вам."
   echo "  ${CYA}Узнать ID: напишите @userinfobot в Telegram (пришлёт число).${RST}"
   OWNER_TG_ID=""
-  printf "  Telegram ID (Enter — настроить позже): "
-  read -r OWNER_TG_ID
-  if [ -n "$OWNER_TG_ID" ] && ! printf '%s' "$OWNER_TG_ID" | grep -qE '^[0-9]{5,12}$'; then
-    warn "Не похоже на числовой ID — пропускаю (настроите позже: openclaw config set)"
-    OWNER_TG_ID=""
+  if [ "$PRESET_ID" = "coach-team" ]; then
+    printf "  Telegram ID владельца: "
+    read -r OWNER_TG_ID
+    p="$(owner_tg_id_problem "$OWNER_TG_ID")"
+    while [ -n "$p" ]; do
+      printf "  ${YEL}%s. Введите ID ещё раз:${RST} " "$p"
+      read -r OWNER_TG_ID
+      p="$(owner_tg_id_problem "$OWNER_TG_ID")"
+    done
+  else
+    printf "  Telegram ID (Enter — настроить позже): "
+    read -r OWNER_TG_ID
+    p="$(owner_tg_id_problem "$OWNER_TG_ID")"
+    if [ -n "$OWNER_TG_ID" ] && [ -n "$p" ]; then
+      warn "Не похоже на числовой ID — пропускаю (настроите позже: openclaw config set)"
+      OWNER_TG_ID=""
+    fi
   fi
   [ -n "$OWNER_TG_ID" ] && ok "Доступ будет ограничен ID: $OWNER_TG_ID"
 

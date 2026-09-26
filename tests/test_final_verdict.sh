@@ -19,7 +19,7 @@ e2e() {
   local to=""; [ -e "$SANDBOX/sys/timeout" ] && to="timeout 180"
   OUT="$SANDBOX/out-$label.txt"
   env -i HOME="$SB_HOME" PATH="$(sb_path)" TMPDIR="$SB_TMP" TERM=dumb LANG=C.UTF-8 \
-    AISTACK_NONINTERACTIVE=1 AISTACK_API_KEY="$KEY" AISTACK_TG_TOKENS="$TOKS" \
+    AISTACK_NONINTERACTIVE=1 AISTACK_API_KEY="$KEY" AISTACK_TG_TOKENS="$TOKS" AISTACK_OWNER_TG_ID=123456789 \
     AISTACK_LOG="$SB_TMP/install.log" E2E_CALLS="$SB_CALLS" E2E_REPO="$REPO_DIR" "$@" \
     $to bash "$REPO_DIR/install.sh" AIS-START-COACH-TEST0001 > "$OUT" 2>&1 </dev/null
   RC=$?
@@ -42,6 +42,12 @@ expect_fail "channels add отклонён для роли designer" 'Telegram-�
 PRESEED="" e2e gateway_down E2E_GATEWAY_DOWN=1
 expect_fail "gateway не отвечает на RPC-пробу" 'Gateway'
 
+PRESEED="" e2e allowlist_down E2E_FAIL_ALLOWLIST=designer
+expect_fail "allowlist дизайнера не записался" 'доступ владельца к боту designer'
+
+PRESEED="" e2e owner_commands_down E2E_FAIL_OWNER_COMMANDS=1
+expect_fail "владелец команд не записался" 'Владелец команд'
+
 # Повторная установка: агенты уже есть (agents add → «already exists», код 9),
 # чтение конфига подтверждает агента, каталог и привязку → успех законен
 PRESEED="coordinator designer copywriter" e2e preexisting
@@ -57,7 +63,7 @@ rm -rf "$SANDBOX"; new_sandbox; add_e2e_stubs
 echo "coordinator /somewhere/else/workspace-old" >> "$SB_CALLS.state.agents"
 to=""; [ -e "$SANDBOX/sys/timeout" ] && to="timeout 180"
 env -i HOME="$SB_HOME" PATH="$(sb_path)" TMPDIR="$SB_TMP" TERM=dumb LANG=C.UTF-8 \
-  AISTACK_NONINTERACTIVE=1 AISTACK_API_KEY="$KEY" AISTACK_TG_TOKENS="$TOKS" \
+  AISTACK_NONINTERACTIVE=1 AISTACK_API_KEY="$KEY" AISTACK_TG_TOKENS="$TOKS" AISTACK_OWNER_TG_ID=123456789 \
   AISTACK_LOG="$SB_TMP/install.log" E2E_CALLS="$SB_CALLS" E2E_REPO="$REPO_DIR" \
   $to bash "$REPO_DIR/install.sh" AIS-START-COACH-TEST0001 > "$SANDBOX/out-foreign.txt" 2>&1 </dev/null
 RC=$?; OUT="$SANDBOX/out-foreign.txt"; MARKS="$(grep -c 'AIStack установлен' "$OUT")"

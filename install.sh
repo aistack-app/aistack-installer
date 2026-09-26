@@ -17,11 +17,14 @@ LIBS="helpers preflight apt-deps hermes-setup openclaw-setup workspace-deploy wi
 # ── Bootstrap: грузим lib/ локально (если запущен из чекаута) или с github ───
 _self="${BASH_SOURCE[0]:-}"
 _dir=""
+_bootstrap_preset=""
 [ -n "$_self" ] && _dir="$(cd "$(dirname "$_self")" 2>/dev/null && pwd || true)"
 if [ -n "$_dir" ] && [ -f "$_dir/lib/helpers.sh" ]; then
   for m in $LIBS; do
+    if [ "$m" = hermes-setup ] && [ "$_bootstrap_preset" = coach-team ]; then continue; fi
     # shellcheck disable=SC1090
     . "$_dir/lib/$m.sh"
+    if [ "$m" = helpers ]; then parse_key "$RAW_KEY" >/dev/null || true; _bootstrap_preset="${PRESET_ID:-}"; fi
   done
 else
   _tmp="$(mktemp -d)"
@@ -31,19 +34,21 @@ else
     exit 1
   fi
   for m in $LIBS; do
+    if [ "$m" = hermes-setup ] && [ "$_bootstrap_preset" = coach-team ]; then continue; fi
     if ! curl -fsSL "$AISTACK_BASE_URL/lib/$m.sh" -o "$_tmp/$m.sh"; then
       echo "❌ Не удалось скачать lib/$m.sh с $AISTACK_BASE_URL. Проверьте интернет." >&2
       exit 1
     fi
     # shellcheck disable=SC1090
     . "$_tmp/$m.sh"
+    if [ "$m" = helpers ]; then parse_key "$RAW_KEY" >/dev/null || true; _bootstrap_preset="${PRESET_ID:-}"; fi
   done
 fi
 
 print_logo() {
   echo ""
   echo "${MAG}  █████${RST} ${CYA}AIStack${RST}  ·  AI-команда в одну команду"
-  echo "${MAG}  ░░░░░${RST} v1.5  ·  Hermes + OpenClaw (open source)"
+  echo "${MAG}  ░░░░░${RST} v1.5  ·  OpenClaw (open source)"
   echo ""
 }
 
@@ -81,11 +86,15 @@ main() {
   stage "STAGE 2/8 · системные зависимости"
   install_system_deps
 
-  # ── Stage 3: Hermes runtime (pip, ARM-safe, без Chromium) ─────────────────
-  stage "STAGE 3/8 · Hermes (память команды)"
-  start_watchdog 1020   # установка пакета длинная — поднимаем лимит watchdog
-  hermes_install
-  start_watchdog 600
+  # ── Stage 3: Hermes — только для сборок, где он нужен отдельно ─────────────
+  stage "STAGE 3/8 · дополнительный runtime"
+  if [ "$PRESET_ID" = "coach-team" ]; then
+    ok "COACH: Hermes не нужен — агенты и файловая память работают в OpenClaw"
+  else
+    start_watchdog 1020   # установка пакета длинная — поднимаем лимит watchdog
+    hermes_install
+    start_watchdog 600
+  fi
 
   # ── Stage 4: OpenClaw ─────────────────────────────────────────────────────
   stage "STAGE 4/8 · OpenClaw runtime"
@@ -154,7 +163,7 @@ print_final_marker() {
   echo "  НЕ проверено установщиком (нужен живой запуск):"
   echo "  ? ответ модели ${MODEL:-(не выбрана: openclaw models set)} с вашим ключом/подпиской"
   echo "  ? ответы ботов — напишите каждому из ${AGENT_COUNT} ботов «привет»; нет ответа → openclaw models status"
-  echo "  · Hermes (~/.hermes/) установлен, его работа не проверялась"
+  [ "${PRESET_ID:-}" != "coach-team" ] && echo "  · Hermes (~/.hermes/) ставился отдельно; его работа не проверялась"
   if [ "${PRESET_ID:-}" = "smallbiz-team" ]; then
     echo "  🗺  С чего начать:    спросите Хозяина «с чего начать» — проведёт по первой неделе"
   fi

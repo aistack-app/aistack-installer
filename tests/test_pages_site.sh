@@ -123,10 +123,15 @@ EOF
 }
 
 client_run "$SITE" ok
-got=""; for f in $need; do [ "$f" = install.ps1 ] && continue; grep -q "\"GET /$f HTTP/1.[01]\" 200" "$SRV_LOG" || got="$got $f"; done
+got=""; for f in $need; do [ "$f" = install.ps1 ] && continue; [ "$f" = lib/hermes-setup.sh ] && continue; grep -q "\"GET /$f HTTP/1.[01]\" 200" "$SRV_LOG" || got="$got $f"; done
 if [ "$RC" -eq 0 ] && grep -q 'ничего не установлено' "$OUT" && [ -z "$got" ] && ! grep -q 'curl-denied' "$SB_CALLS"; then
-  pass "bash <(curl …/install.sh) → грузит install.sh, 7 lib/*.sh и models.tsv с сайта (все 200), dry-run exit 0"
+  pass "bash <(curl …/install.sh) → грузит install.sh, COACH-библиотеки и models.tsv с сайта (все 200), dry-run exit 0"
 else fail "клиентский запуск: exit=$RC, не скачано:${got:- —}, $(grep -m1 -E '❌|curl-denied' "$OUT" "$SB_CALLS")"; fi
+SITE_NO_HERMES="$SANDBOX/site-no-hermes"; cp -R "$SITE" "$SITE_NO_HERMES"; rm "$SITE_NO_HERMES/lib/hermes-setup.sh"
+client_run "$SITE_NO_HERMES" nohermes
+if [ "$RC" -eq 0 ] && ! grep -q 'GET /lib/hermes-setup.sh' "$SRV_LOG"; then
+  pass "COACH не скачивает Hermes-библиотеку, даже если её URL недоступен"
+else fail "COACH зависит от Hermes-библиотеки: exit=$RC"; fi
 grep -q 'AIStack установлен' "$OUT" && fail "dry-run объявил установку" || pass "dry-run не печатает «AIStack установлен»"
 
 SITE404="$SANDBOX/site404"; cp -R "$SITE" "$SITE404"; rm "$SITE404/lib/models.tsv"

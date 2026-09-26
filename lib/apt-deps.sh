@@ -31,13 +31,19 @@ _deps_debian() {
   fi
 
   run_step "Обновляю списки пакетов (apt-get update)" $SUDO apt-get update -y
-  # Базовые пакеты. software-properties-common даёт add-apt-repository (для deadsnakes).
-  # nodejs здесь НЕ ставим — Node ставит NodeSource (apt-овый слишком старый, см. ensure_node).
-  run_step "Ставлю базовые пакеты (git, curl, sqlite, ripgrep, ffmpeg, tools)" \
-    $SUDO apt-get install -y --no-install-recommends \
-      ca-certificates curl git gnupg xz-utils sqlite3 ripgrep ffmpeg \
-      software-properties-common
-  ensure_python_311_or_newer "$SUDO"
+  # NodeSource и OpenClaw нужны обеим сборкам; Node ставит ensure_node.
+  if [ "${PRESET_ID:-}" = "coach-team" ]; then
+    run_step "Ставлю зависимости COACH (curl, git, сертификаты, NodeSource tools)" \
+      $SUDO apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg xz-utils
+  else
+    # Для дополнительных сборок оставляем Python/Hermes и медиа-утилиты.
+    run_step "Ставлю базовые пакеты (git, curl, sqlite, ripgrep, ffmpeg, tools)" \
+      $SUDO apt-get install -y --no-install-recommends \
+        ca-certificates curl git gnupg xz-utils sqlite3 ripgrep ffmpeg \
+        software-properties-common
+    ensure_python_311_or_newer "$SUDO"
+  fi
   ensure_node "$SUDO"
   ok "Системные зависимости установлены"
 }
@@ -48,9 +54,13 @@ _deps_macos() {
     err '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
     exit 1
   fi
-  # python@3.11 — минимально требуемая ветка; node свежий через brew по умолчанию
-  run_step "Ставлю зависимости через brew (python@3.11, node, git, sqlite, ripgrep, ffmpeg)" \
-    brew install python@3.11 node git sqlite ripgrep ffmpeg
+  if [ "${PRESET_ID:-}" = "coach-team" ]; then
+    run_step "Ставлю зависимости COACH через brew (node, git)" brew install node git
+  else
+    # python@3.11 — минимально требуемая ветка для дополнительного Hermes.
+    run_step "Ставлю зависимости через brew (python@3.11, node, git, sqlite, ripgrep, ffmpeg)" \
+      brew install python@3.11 node git sqlite ripgrep ffmpeg
+  fi
   ok "Системные зависимости установлены (brew)"
 }
 

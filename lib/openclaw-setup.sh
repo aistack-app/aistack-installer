@@ -218,22 +218,39 @@ _account_ok() {  # <channels.telegram.accounts json> <id>
   printf '%s' "$1" | _split_before '"[A-Za-z0-9_-]+":[{]' | grep -F "\"$2\":{" \
     | grep -qE '"(tokenFile|botToken)":'
 }
+_account_access_ok() { # <one account json> <numeric owner id>
+  printf '%s' "$1" | grep -qF '"dmPolicy":"allowlist"' \
+    && printf '%s' "$1" | grep -qF "\"allowFrom\":[\"$2\"]"
+}
 
 # verify_team — read-back: для каждой роли в конфиге OpenClaw есть Telegram-
 # аккаунт с токеном, агент с НАШИМ рабочим каталогом и привязка telegram:<роль>
 verify_team() {
   CURRENT_STAGE="Stage 7c: проверка команды"
   [ "${AISTACK_DRY_RUN:-0}" = "1" ] && return 0
-  local al bl cl a
+  local al bl cl a access commands_owner
   al="$(openclaw config get agents.list --json 2>/dev/null | _json_flat || true)"
   bl="$(openclaw config get bindings --json 2>/dev/null | _json_flat || true)"
   cl="$(openclaw config get channels.telegram.accounts --json 2>/dev/null | _json_flat || true)"
+  if [ "${PRESET_ID:-}" = "coach-team" ] && [ -z "${OWNER_TG_ID:-}" ]; then
+    add_problem "Не задан Telegram ID владельца COACH"
+  fi
   for a in $AGENTS; do
     _account_ok "$cl" "$a" || add_problem "Telegram-аккаунт $a не найден в конфиге OpenClaw (бот не подключён)"
     _agent_ok "$al" "$a" "$WORKSPACE_BASE/workspace-$a" \
       || add_problem "Агент $a не найден в конфиге или работает из другого каталога (нужен $WORKSPACE_BASE/workspace-$a)"
     _binding_ok "$bl" "$a" || add_problem "Агент $a не привязан к боту telegram:$a"
+    if [ -n "${OWNER_TG_ID:-}" ]; then
+      access="$(openclaw config get "channels.telegram.accounts.$a" --json 2>/dev/null | _json_flat || true)"
+      _account_access_ok "$access" "$OWNER_TG_ID" \
+        || add_problem "Не подтверждён доступ владельца к боту $a (dmPolicy/allowFrom)"
+    fi
   done
+  if [ -n "${OWNER_TG_ID:-}" ]; then
+    commands_owner="$(openclaw config get commands.ownerAllowFrom --json 2>/dev/null | _json_flat || true)"
+    [ "$commands_owner" = "[\"telegram:$OWNER_TG_ID\"]" ] \
+      || add_problem "Владелец команд не подтверждён в конфиге (commands.ownerAllowFrom)"
+  fi
   [ "$PROBLEM_COUNT" -eq 0 ] && ok "Команда подтверждена чтением конфига: $AGENTS"
   return 0
 }

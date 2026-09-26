@@ -92,7 +92,12 @@ switch -Wildcard ($k) {
     switch ($a[2]) {
       'agents.list' { $o = @(); foreach ($l in (Lines "$st.agents")) { $p = $l.Split("`t"); $o += ('{"id": "' + $p[0] + '", "workspace": "' + (Esc $p[1]) + '"}') }; '[' + ($o -join ', ') + ']' }
       'bindings' { $o = @(); foreach ($l in (Lines "$st.agents")) { $p = $l.Split("`t"); $o += ('{"agentId": "' + $p[0] + '", "match": {"channel": "telegram", "accountId": "' + $p[0] + '"}}') }; '[' + ($o -join ', ') + ']' }
-      'channels.telegram.accounts' { $o = @(); foreach ($l in (Lines "$st.accounts")) { $p = $l.Split("`t"); $o += ('"' + $p[0] + '": {"tokenFile": "' + (Esc $p[1]) + '"}') }; '{' + ($o -join ', ') + '}' }
+      'channels.telegram.accounts' { $o = @(); foreach ($l in (Lines "$st.accounts")) {
+        $p = $l.Split("`t")
+        $access = if ($env:ST_FAIL_ALLOWLIST -eq $p[0]) { '"dmPolicy":"pairing"' } else { '"dmPolicy":"allowlist","allowFrom":["' + $env:AISTACK_OWNER_TG_ID + '"]' }
+        $o += ('"' + $p[0] + '": {"tokenFile": "' + (Esc $p[1]) + '",' + $access + '}')
+      }; '{' + ($o -join ', ') + '}' }
+      'commands.ownerAllowFrom' { if ($env:ST_FAIL_OWNER_COMMANDS) { '[]' } else { '["telegram:' + $env:AISTACK_OWNER_TG_ID + '"]' } }
     }
     exit 0
   }
@@ -151,7 +156,7 @@ function Invoke-Scenario([string]$Name, [hashtable]$Vars, [string[]]$HostArgs = 
             AISTACK_LOG = (Join-Path $tmp "install-$Name.log"); AISTACK_BUSINESS = 'Нина Лебедева · сон & отдых' }
   if (-not $IsWin) { $all['AISTACK_TEST_ALLOW_NONWINDOWS'] = '1'; $all['HOME'] = (Join-Path $root 'pwsh-home') }
   foreach ($k in $Vars.Keys) { $all[$k] = $Vars[$k] }
-  $names = @('AISTACK_DRY_RUN', 'AISTACK_API_KEY', 'AISTACK_TG_TOKENS', 'ST_FAIL_AGENTS_ADD', 'ST_GATEWAY_DOWN', 'AISTACK_OWNER_TG_ID') + @($all.Keys)
+  $names = @('AISTACK_DRY_RUN', 'AISTACK_API_KEY', 'AISTACK_TG_TOKENS', 'ST_FAIL_AGENTS_ADD', 'ST_GATEWAY_DOWN', 'ST_FAIL_ALLOWLIST', 'ST_FAIL_OWNER_COMMANDS', 'AISTACK_OWNER_TG_ID') + @($all.Keys)
   foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $null) }
   foreach ($k in $all.Keys) { [Environment]::SetEnvironmentVariable($k, [string]$all[$k]) }
   $out = Join-Path $root "out-$Name.txt"; $err = Join-Path $root "err-$Name.txt"
@@ -246,11 +251,17 @@ $exp = Join-Path (Join-Path (Join-Path $prof 'AIStack-Vault') 'profile') 'expert
 if ((Test-Path -LiteralPath $exp) -and ([IO.File]::ReadAllText($exp, $Utf8)).Contains('Нина Лебедева · сон & отдых')) { Pass 'vault в профиле с кириллицей и пробелом создан, название записано в UTF-8 без искажений' }
 else { Fail 'vault/кодировка: profile\expert.md не найден или название искажено' }
 
-$r = Invoke-Scenario 'agentsfail' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine; ST_FAIL_AGENTS_ADD = '1' }
-if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'НЕ завершена') { Pass 'agents add падает → «НЕ завершена», код ≠ 0, маркера нет' } else { Fail ("agents add: exit={0}, маркер×{1}" -f $r.Code, $r.Marks) }
+$r = Invoke-Scenario 'agentsfail' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine; AISTACK_OWNER_TG_ID = '123456789'; ST_FAIL_AGENTS_ADD = '1' }
+if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'НЕ завершена' -and $r.Calls -match 'agents add') { Pass 'agents add падает → «НЕ завершена», код ≠ 0, маркера нет' } else { Fail ("agents add: exit={0}, маркер×{1}" -f $r.Code, $r.Marks) }
 
-$r = Invoke-Scenario 'gwdown' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine; ST_GATEWAY_DOWN = '1' }
-if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'Gateway') { Pass 'gateway не отвечает → «НЕ завершена», код ≠ 0, маркера нет' } else { Fail ("gateway: exit={0}, маркер×{1}" -f $r.Code, $r.Marks) }
+$r = Invoke-Scenario 'gwdown' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine; AISTACK_OWNER_TG_ID = '123456789'; ST_GATEWAY_DOWN = '1' }
+if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'Gateway' -and $r.Calls -match 'gateway status') { Pass 'gateway не отвечает → «НЕ завершена», код ≠ 0, маркера нет' } else { Fail ("gateway: exit={0}, маркер×{1}" -f $r.Code, $r.Marks) }
+$r = Invoke-Scenario 'allowlist-down' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine; AISTACK_OWNER_TG_ID = '123456789'; ST_FAIL_ALLOWLIST = 'designer' }
+if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'доступ владельца к боту designer') { Pass 'allowlist не подтвердился → установка не завершена' } else { Fail 'неподтверждённый allowlist принят' }
+$r = Invoke-Scenario 'owner-commands-down' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine; AISTACK_OWNER_TG_ID = '123456789'; ST_FAIL_OWNER_COMMANDS = '1' }
+if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'Владелец команд') { Pass 'владелец команд не подтвердился → установка не завершена' } else { Fail 'неподтверждённый владелец команд принят' }
+$r = Invoke-Scenario 'missing-owner' @{ AISTACK_API_KEY = $Key; AISTACK_TG_TOKENS = $TokLine }
+if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'AISTACK_OWNER_TG_ID' -and -not $r.Calls) { Pass 'без ID владельца отказ до вызовов OpenClaw' } else { Fail 'пустой ID владельца принят' }
 
 # ── 4) Итог ─────────────────────────────────────────────────────────────────
 if ($script:Elevated) { Fail 'запуск с повышенными правами: приёмка требует обычного окна PowerShell (не «от имени администратора»)' }

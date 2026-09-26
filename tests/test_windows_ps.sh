@@ -202,7 +202,7 @@ psv() {  # psv <метка> [VAR=val…] → RC, MARKS, OUT
   OUT="$SANDBOX/ps-$label.out"
   env -u AISTACK_HB HOME="$SANDBOX/pwsh-home" USERPROFILE="$SB_HOME" PATH="$SB_BIN:$PATH" TMPDIR="$SB_TMP" \
     AISTACK_TEST_ALLOW_NONWINDOWS=1 AISTACK_NONINTERACTIVE=1 AISTACK_TEMPLATES_DIR="$REPO_DIR/templates" \
-    AISTACK_API_KEY="sk-proj-FAKEe2eFAKEe2eFAKEe2eFAKE01" \
+    AISTACK_API_KEY="sk-proj-FAKEe2eFAKEe2eFAKEe2eFAKE01" AISTACK_OWNER_TG_ID=123456789 \
     AISTACK_TG_TOKENS="111111111:FAKEtokenFAKEtokenFAKEtokenFAKE0001 222222222:FAKEtokenFAKEtokenFAKEtokenFAKE0002 333333333:FAKEtokenFAKEtokenFAKEtokenFAKE0003" \
     AISTACK_LOG="$SB_TMP/ps-v.log" E2E_CALLS="$SB_CALLS" E2E_REPO="$REPO_DIR" "$@" \
     pwsh -NoLogo -NoProfile -NonInteractive -File "$PS1" AIS-START-COACH-TEST0001 > "$OUT" 2>&1 </dev/null
@@ -216,6 +216,10 @@ psfail() {
 PRESEED="" FOREIGN="" psv agents_fail E2E_FAIL_AGENTS_ADD=1;       psfail "agents add падает для всех ролей" 'Агент coordinator'
 PRESEED="" FOREIGN="" psv channel_fail E2E_FAIL_CHANNEL=designer;  psfail "channels add отклонён для designer" 'Telegram-аккаунт designer'
 PRESEED="" FOREIGN="" psv gateway_down E2E_GATEWAY_DOWN=1;         psfail "gateway не отвечает на RPC-пробу" 'Gateway'
+PRESEED="" FOREIGN="" psv allowlist_down E2E_FAIL_ALLOWLIST=designer; psfail "allowlist дизайнера не записался" 'доступ владельца к боту designer'
+PRESEED="" FOREIGN="" psv owner_commands_down E2E_FAIL_OWNER_COMMANDS=1; psfail "владелец команд не записался" 'Владелец команд'
+PRESEED="" FOREIGN="" psv missing_owner AISTACK_OWNER_TG_ID=; [ "$RC" -ne 0 ] && [ "$MARKS" = 0 ] && grep -q 'AISTACK_OWNER_TG_ID' "$OUT" && pass "PS: без ID владельца отказ до установки" || fail "PS: пустой ID принят"
+PRESEED="" FOREIGN="" psv invalid_owner AISTACK_OWNER_TG_ID=not-an-id; [ "$RC" -ne 0 ] && [ "$MARKS" = 0 ] && grep -q 'AISTACK_OWNER_TG_ID' "$OUT" && pass "PS: неверный ID владельца отвергнут" || fail "PS: неверный ID принят"
 PRESEED="" FOREIGN=1  psv foreign;                                 psfail "агент coordinator с чужим рабочим каталогом" 'Агент coordinator'
 PRESEED="coordinator designer copywriter" FOREIGN="" psv preexisting
 [ "$RC" -eq 0 ] && [ "$MARKS" = 1 ] && grep -q '^openclaw config get bindings --json$' "$SB_CALLS" \

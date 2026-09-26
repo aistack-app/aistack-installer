@@ -93,8 +93,26 @@ case "$n" in
             printf ']\n';;
           channels.telegram.accounts)
             printf '{'; sep=""; [ -f "$st.accounts" ] && while read -r a f; do
-              printf '%s"%s": {"dmPolicy": "pairing", "tokenFile": "%s"}' "$sep" "$a" "$f"; sep=", "; done < "$st.accounts"
+              if [ "$a" = "${E2E_FAIL_ALLOWLIST:-}" ]; then
+                printf '%s"%s":{"dmPolicy":"pairing","tokenFile":"%s"}' "$sep" "$a" "$f"
+              else
+                printf '%s"%s":{"dmPolicy":"allowlist","allowFrom":["%s"],"tokenFile":"%s"}' "$sep" "$a" "${AISTACK_OWNER_TG_ID:-123456789}" "$f"
+              fi
+              sep=", "
+            done < "$st.accounts"
             printf '}\n';;
+          channels.telegram.accounts.*)
+            a="${3#channels.telegram.accounts.}"
+            f="$(awk -v id="$a" '$1 == id {print $2; exit}' "$st.accounts" 2>/dev/null)"
+            if [ -z "$f" ]; then echo null
+            elif [ "$a" = "${E2E_FAIL_ALLOWLIST:-}" ]; then
+              printf '{"tokenFile":"%s","dmPolicy":"pairing"}\n' "$f"
+            else
+              printf '{"tokenFile":"%s","dmPolicy":"allowlist","allowFrom":["%s"]}\n' "$f" "${AISTACK_OWNER_TG_ID:-123456789}"
+            fi;;
+          commands.ownerAllowFrom)
+            if [ -n "${E2E_FAIL_OWNER_COMMANDS:-}" ]; then echo '[]'
+            else printf '["telegram:%s"]\n' "${AISTACK_OWNER_TG_ID:-123456789}"; fi;;
         esac;;
       "config patch")
         f="$(argval --file "$@")"
