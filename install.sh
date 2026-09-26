@@ -4,8 +4,9 @@
 #
 #   bash <(curl -fsSL https://aistack-app.github.io/aistack-installer/install.sh) AIS-...
 #
-# Платформы: macOS (Intel+ARM), Ubuntu 22.04+, Debian 12+. Windows — не в v1.5.
-# Тестовый прогон без установки: AISTACK_DRY_RUN=1 bash install.sh AIS-TEAM-FULL-DEV1234
+# Платформы: macOS (Intel+ARM), Ubuntu 22.04+, Debian 12+; Windows COACH — install.ps1.
+# Нативный Windows W1 на заглушках пройден; живой OpenClaw и клиентская установка не проверены.
+# Тестовый прогон без установки: AISTACK_DRY_RUN=1 bash install.sh AIS-START-COACH-TEST0001
 # ============================================================================
 set -euo pipefail
 
