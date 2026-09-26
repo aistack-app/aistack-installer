@@ -208,13 +208,14 @@ $details += ('фраза «{0}» в выводе: {1}; последние стр
 $details += ('объектов в профиле после dry-run: {0} (из них нет в контроле: {1}); список — tree-dry.txt' -f $r.Tree.Count, $onlyDry.Count)
 foreach ($t in ($r.Tree | Select-Object -First 15)) { $details += ('профиль после dry-run: ' + $t + $(if ($ctl.Tree -contains $t) { '   [есть и в контроле]' } else { '' })) }
 $parts = [ordered]@{
+  'контрольный хост завершился кодом 0'    = ($ctl.Code -eq 0)
   'код выхода 0'                           = ($r.Code -eq 0)
   'нет «AIStack установлен»'              = ($r.Marks -eq 0)
   ('в выводе есть «' + $phrase + '»')      = $r.Text.Contains($phrase)
-  'профиль после dry-run пуст'             = ($r.Tree.Count -eq 0)
+  'профиль без новых объектов сверх контроля' = ($onlyDry.Count -eq 0)
   'ни одного вызова openclaw'              = (-not $r.Calls)
 }
-Test-Parts 'dry-run: exit 0, без «AIStack установлен», профиль пуст, ни одного вызова openclaw' $parts $details
+Test-Parts 'dry-run: exit 0, без «AIStack установлен», без новых объектов в профиле и вызовов openclaw' $parts $details
 
 $r = Invoke-Scenario 'nokeys' @{}
 if ($r.Code -ne 0 -and $r.Marks -eq 0 -and $r.Text -match 'AISTACK_API_KEY' -and -not $r.Calls) { Pass 'без ключей: отказ до любых вызовов openclaw' }
