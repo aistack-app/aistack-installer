@@ -1,0 +1,39 @@
+# Проверка публикации установщика. Сам сайт публикует штатный GitHub Pages
+# (legacy, источник main:/) — этот workflow ничего не деплоит и Pages не трогает.
+# PR и push: офлайн-тесты + эталон (нет файла/BOM/front matter/страницы → красный).
+# Push в main: после сборки Pages каждый файл загрузчика сверяется по SHA-256,
+# страницы index.html и docs/*.html должны открываться.
+name: pages-verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Офлайн-тесты установщика
+        run: bash tests/run.sh
+      - name: Эталон сайта
+        run: bash tools/build-pages-site.sh _expected
+
+  live:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Эталон сайта
+        run: bash tools/build-pages-site.sh _expected
+      - name: Опубликованный сайт совпадает с эталоном
+        env:
+          VERIFY_ATTEMPTS: "20"
+          VERIFY_DELAY: "30"
+        run: bash tools/verify-pages-site.sh "https://aistack-app.github.io/aistack-installer" _expected
